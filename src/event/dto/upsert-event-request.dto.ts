@@ -31,97 +31,288 @@ const websiteValidation = z.string().refine((url) => {
   message: 'website is not in correct format',
 });
 
-// Time format validation for timing
-const timeValidation = z.string().refine((time) => {
-  return /^(1[0-2]|0?[1-9]):[0-5][0-9] (AM|PM)$/i.test(time);
-}, {
-  message: 'wrong timing format',
-});
 
-// JSON array validation for categories (max 2 items)
-const categoryValidation = z.string().transform((val, ctx) => {
+
+const contactValidation = z.string().refine((val) => {
+  if (!val || val.trim() === '') return true;
+  
   try {
-    const parsed = JSON.parse(val);
-    if (!Array.isArray(parsed)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'category should be a JSON array',
-      });
-      return z.NEVER;
+    const contacts = JSON.parse(val);
+    
+    if (!Array.isArray(contacts)) {
+      return false;
     }
     
-    if (parsed.length > 2) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'select atmost 2 category',
-      });
-      return z.NEVER;
-    }
-    
-    // Check if all items are numeric
-    const allNumeric = parsed.every(item => typeof item === 'number' && Number.isInteger(item));
-    if (!allNumeric) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'category should be in numeric',
-      });
-      return z.NEVER;
-    }
-    
-    return parsed as number[];
-  } catch {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'invalid category format',
+    return contacts.every((contact, index) => {
+      if (typeof contact !== 'object' || contact === null) {
+        return false;
+      }
+      
+      // EXACT keys from PHP code
+      const allowedKeys = ['email', 'website', 'verifiedBy'];
+      const providedKeys = Object.keys(contact);
+      const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+      
+      if (invalidKeys.length > 0) {
+        return false;
+      }
+      
+      // Email is required (from PHP code)
+      if (!contact.email || typeof contact.email !== 'string') {
+        return false;
+      }
+      
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(contact.email)) {
+        return false;
+      }
+      
+      // Website is optional string
+      if (contact.website && typeof contact.website !== 'string') {
+        return false;
+      }
+      
+      // VerifiedBy is optional number
+      if (contact.verifiedBy !== undefined && !Number.isInteger(contact.verifiedBy)) {
+        return false;
+      }
+      
+      return true;
     });
-    return z.NEVER;
+  } catch {
+    return false;
   }
-});
+}, {
+  message: 'contact must be valid JSON array with email (required), website (optional), verifiedBy (optional)',
+}).optional();
 
-
-// Stats validation
 const statsValidation = z.union([
   z.string().transform((val, ctx) => {
+    if (!val || val.trim() === '') return undefined;
+    
     try {
       const parsed = JSON.parse(val);
+      
       if (typeof parsed !== 'object' || parsed === null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'invalid format for stats',
+          message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}',
         });
         return z.NEVER;
       }
+
+      // EXACT keys from PHP code
+      const allowedKeys = ['visitors', 'exhibitors', 'area'];
+      const providedKeys = Object.keys(parsed);
+      const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+      
+      if (invalidKeys.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Invalid keys in stats: ${invalidKeys.join(', ')}. Allowed keys: ${allowedKeys.join(', ')}`,
+        });
+        return z.NEVER;
+      }
+
       return parsed;
     } catch {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'invalid format for stats',
+        message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}',
       });
       return z.NEVER;
     }
   }),
-  z.object({}).passthrough() 
+  z.object({
+    visitors: z.union([z.string(), z.number()]).optional(),
+    exhibitors: z.union([z.string(), z.number()]).optional(),
+    area: z.union([z.string(), z.number()]).optional(),
+  }).strict()
 ]).optional();
 
-// Timing validation
+const eventSettingsValidation = z.string().refine((settings) => {
+  if (!settings || settings.trim() === '') return true;
+  
+  try {
+    const parsed = JSON.parse(settings);
+    
+    if (typeof parsed !== 'object' || parsed === null) {
+      return false;
+    }
+    
+    // Strict key validation
+    const allowedKeys = ['autoApproval', 'regStartDate', 'regEndDate', 'capacity'];
+    const providedKeys = Object.keys(parsed);
+    const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+    
+    if (invalidKeys.length > 0) {
+      return false;
+    }
+    
+    // Validate autoApproval
+    if (parsed.autoApproval !== undefined && ![0, 1].includes(parsed.autoApproval)) {
+      return false;
+    }
+    
+    // Validate date formats
+    const dateRegex = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/;
+    if (parsed.regStartDate && !dateRegex.test(parsed.regStartDate)) {
+      return false;
+    }
+    
+    if (parsed.regEndDate && !dateRegex.test(parsed.regEndDate)) {
+      return false;
+    }
+    
+    // Validate capacity
+    if (parsed.capacity !== undefined && (!Number.isInteger(parsed.capacity) || parsed.capacity < 0)) {
+      return false;
+    }
+    
+    // Validate date logic
+    if (parsed.regStartDate && parsed.regEndDate) {
+      const startDate = new Date(parsed.regStartDate);
+      const endDate = new Date(parsed.regEndDate);
+      if (startDate >= endDate) {
+        return false;
+      }
+    }
+    
+    return true;
+  } catch {
+    return false;
+  }
+}, {
+  message: 'eventSettings must be valid JSON with correct structure. Allowed keys: autoApproval (0|1), regStartDate (YYYY-MM-DD), regEndDate (YYYY-MM-DD), capacity (number)',
+}).optional()
+
+const productValidation = z.string().refine((val) => {
+  if (!val || val.trim() === '') return true;
+  
+  try {
+    const products = JSON.parse(val);
+    
+    // Can be object (key-value pairs) or array
+    if (Array.isArray(products)) {
+      // Array format - just validate each item is string or number
+      return products.every(product => 
+        typeof product === 'string' || typeof product === 'number'
+      );
+    }
+    
+    if (typeof products === 'object' && products !== null) {
+      // Object format - validate keys and values
+      for (const [productKey, publishedStatus] of Object.entries(products)) {
+        if (typeof productKey !== 'string' || productKey.trim().length === 0) {
+          return false;
+        }
+        
+        if (!['0', '1'].includes(publishedStatus as string)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    
+    return false;
+  } catch {
+    return false;
+  }
+}, {
+  message: 'product must be valid JSON array or object with product keys and "0"/"1" values',
+}).optional();
+
+const subVenueValidation = z.string().refine((val) => {
+  if (!val || val.trim() === '') return true;
+  
+  try {
+    const subVenues = JSON.parse(val);
+    
+    if (!Array.isArray(subVenues)) {
+      return false;
+    }
+    
+    return subVenues.every(subVenue => {
+      // Can be string, number (as per PHP code)
+      if (typeof subVenue === 'string' || typeof subVenue === 'number') {
+        return subVenue.toString().trim().length > 0;
+      }
+      
+      // Or object with id/name (inferred from PHP logic)
+      if (typeof subVenue === 'object' && subVenue !== null) {
+        const allowedKeys = ['id', 'name'];
+        const providedKeys = Object.keys(subVenue);
+        const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+        
+        if (invalidKeys.length > 0) {
+          return false;
+        }
+        
+        return subVenue.id !== undefined || subVenue.name !== undefined;
+      }
+      
+      return false;
+    });
+  } catch {
+    return false;
+  }
+}, {
+  message: 'invalid format of json',
+}).optional();
+
 const timingValidation = z.union([
   z.string().transform((val, ctx) => {
+    if (!val || val.trim() === '') return undefined;
+    
     try {
       const parsed = JSON.parse(val);
+      
       if (!Array.isArray(parsed)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'wrong timing format',
+          message: 'wrong timimg format',
         });
         return z.NEVER;
       }
       
-      // Validate each timing object
-      for (const timing of parsed) {
+      // EXACT keys from PHP code
+      const allowedKeys = ['type', 'Start_time', 'end_time', 'days', 'timezone', 'timezonecountry'];
+      
+      for (const [index, timing] of parsed.entries()) {
+        if (typeof timing !== 'object' || timing === null) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'wrong timimg format',
+          });
+          return z.NEVER;
+        }
+        
+        const providedKeys = Object.keys(timing);
+        const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+        
+        if (invalidKeys.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Invalid keys in timing[${index}]: ${invalidKeys.join(', ')}. Allowed keys: ${allowedKeys.join(', ')}`,
+          });
+          return z.NEVER;
+        }
+        
+        // Required fields from PHP validation
         if (!timing.Start_time || !timing.end_time) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: 'wrong timing format',
+            message: 'wrong timimg format',
+          });
+          return z.NEVER;
+        }
+        
+        // Exact regex from PHP code
+        const timeRegex = /^(1[0-2]|0?[1-9]):[0-5][0-9] (AM|PM)$/i;
+        if (!timeRegex.test(timing.Start_time) || !timeRegex.test(timing.end_time)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'wrong timimg format',
           });
           return z.NEVER;
         }
@@ -131,232 +322,158 @@ const timingValidation = z.union([
     } catch {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'wrong timing format',
+        message: 'wrong timimg format',
       });
       return z.NEVER;
     }
   }),
   z.array(z.object({
     type: z.string().optional(),
-    Start_time: z.string(),
-    end_time: z.string(),
+    Start_time: z.string().regex(/^(1[0-2]|0?[1-9]):[0-5][0-9] (AM|PM)$/i, 'wrong timimg format'),
+    end_time: z.string().regex(/^(1[0-2]|0?[1-9]):[0-5][0-9] (AM|PM)$/i, 'wrong timimg format'),
     days: z.string().optional(),
     timezone: z.string().optional(),
     timezonecountry: z.string().optional(),
-  }))
+  }).strict())
 ]).optional();
 
-// Event Upsert Schema
+const highlightsValidation = z.string().refine((val) => {
+  if (!val || val.trim() === '') return true;
+  
+  try {
+    const highlights = JSON.parse(val);
+    
+    if (!Array.isArray(highlights)) {
+      return false;
+    }
+    
+    return highlights.every((highlight, index) => {
+      if (typeof highlight !== 'object' || highlight === null) {
+        return false;
+      }
+      
+      // Strict key validation
+      const allowedKeys = ['title', 'description', 'icon', 'order'];
+      const providedKeys = Object.keys(highlight);
+      const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+      
+      if (invalidKeys.length > 0) {
+        return false;
+      }
+      
+      // Title is required
+      if (!highlight.title || typeof highlight.title !== 'string' || highlight.title.trim().length === 0) {
+        return false;
+      }
+      
+      // Optional fields type validation
+      if (highlight.description !== undefined && typeof highlight.description !== 'string') {
+        return false;
+      }
+      
+      if (highlight.icon !== undefined && typeof highlight.icon !== 'string') {
+        return false;
+      }
+      
+      if (highlight.order !== undefined && !Number.isInteger(highlight.order)) {
+        return false;
+      }
+      
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}, {
+  message: 'highlights must be valid JSON array. Each item needs title (required) and optionally: description, icon, order. No other keys allowed.',
+}).optional();
+
+
 export const EventUpsertRequestSchema = z.object({
 
-  id: z.number().optional(), // If present, it's an update
-  
-  // Required for creation
-  changesMadeBy: z.number({
-    required_error: 'changesMadeBy cannot be empty',
-    invalid_type_error: 'changesMadeBy must be a number',
-  }),
-  
-  // Event basic info
+  eventId: z.number(),
   name: z.string().optional(),
-  eventAbbrname: z.string().optional(),
   abbrName: z.string().optional(),
-  eventPunchline: z.string().optional(),
   punchline: z.string().optional(),
-  desc: z.string().optional(),
   description: z.string().optional(),
-  short_desc: z.string().optional(),
-  
-  // Event type and categorization
-  eventType: z.union([z.string(), z.number()]).optional(),
-  type: z.enum(['tradeshow', 'conference', 'workshop', 'meetx', 'business floor']).optional(),
-  subEventType: z.number().optional(),
-  typeVal: z.string().optional(),
-  type_val: z.string().optional(),
-  eventAudience: z.string().optional(),
-  category: categoryValidation.optional(),
-  
-  // Dates
+  shortDesc: z.string().optional(),  
+  type: z.array(z.string().min(1)).optional(), 
+ category: z.array(z.string()).max(2, 'Select at most 2 categories').optional(),  
   startDate: dateValidation.optional(),
   endDate: dateValidation.optional(),
-  when: z.string().optional(),
   
-  // Location
   city: z.union([z.string(), z.number()]).optional(),
   venue: z.union([z.string(), z.number()]).optional(),
-  venueId: z.union([z.string(), z.number()]).optional(),
   country: z.string().optional(),
-  city_code: z.union([z.string(), z.number()]).optional(),
-  removeVenue: z.number().optional(),
   
-  // Organization
-  companyId: z.union([z.string(), z.number()]).optional(),
-  company: z.union([z.string(), z.number()]).optional(),
+  company: z.string().optional(),
   
-  // Web presence
   website: websiteValidation.optional(),
-  eventWebsite: websiteValidation.optional(),
-  url: z.string().optional(),
   
-  // Social media
-  facebookUrl: z.string().optional(),
   facebookId: z.string().optional(),
   twitterId: z.string().optional(),
-  twitterHashTags: z.string().optional(),
+  twitterHashTags: z.string().optional(), // is it needed?
   linkedinId: z.string().optional(),
   googleId: z.string().optional(),
   
-  // Statistics
-  eventExhibitors: z.number().optional(),
-  eventVisitors: z.number().optional(),
-  event_exhibitors: z.number().optional(),
-  event_visitors: z.number().optional(),
-  areaTotal: z.number().optional(),
-  stats: statsValidation.optional(),
+  stats: statsValidation.optional(), 
+ 
+  product: productValidation,  
+  editionId: z.number().optional(),
   
-  // Products
-  eventProducts: z.string().optional(),
-  product: z.string().optional(),
-  
-  // Edition management
-  edition: z.number().optional(),
-  editionNumber: z.number().optional(),
-  rehost: z.number().optional(),
-  
-  // Timing
   timing: timingValidation.optional(),
-  o_timing1: z.array(z.string()).optional(),
-  timing_start_time: z.array(z.string()).optional(),
-  timing_end_time: z.array(z.string()).optional(),
-  multidays_days: z.array(z.string()).optional(),
-  o_timezone: z.array(z.string()).optional(),
-  timezonecountry: z.array(z.string()).optional(),
   
-  // Event data
-  eventHighlights: z.string().optional(),
-  eventDocs: z.string().optional(),
-  deleteEventDocs: z.string().optional(),
-  estimatedTurnout: z.string().optional(),
+  highlights: z.string().optional(),
+  docs: z.string().optional(),
   
-  // Media and attachments
   logo: z.number().optional(),
   wrapper: z.number().optional(),
   wrapperSmall: z.number().optional(),
-  introvideo: z.string().optional(),
-  stream_url: z.string().optional(),
-  og_image: z.number().optional(),
+  introVideo: z.string().optional(),
+  ogImage: z.number().optional(),
   brochure: z.number().optional(),
   customization: z.string().optional(),
   
-  // Settings
-  published: z.number().optional(),
-  status: z.enum(['U', 'P', 'C']).optional(),
-  eventStatus: z.enum(['U', 'P', 'C']).optional(),
-  online_event: z.number().optional(),
-  onlineEvent: z.union([z.string(), z.number()]).optional(),
-  multiCity: z.number().optional(),
   frequency: z.string().optional(),
-  brandId: z.number().optional(),
+  brand: z.number().optional(), 
   
-  // Additional fields
   mailType: z.number().optional(),
   adsense: z.boolean().optional(),
-  iosUrl: z.string().optional(),
-  ios_url: z.string().optional(),
-  androidUrl: z.string().optional(),
-  android_url: z.string().optional(),
-  oldEdition: z.number().optional(),
-  removeDescription: z.literal('description').optional(),
-  deleteIntroVideo: z.number().optional(),
-  commonPin: z.string().optional(),
-  commonEnable: z.number().optional(),
-  checkinValidity: z.string().optional(),
-  exhibitorProfile: z.string().optional(),
-  salesAction: z.string().optional(),
-  salesActionBy: z.number().optional(),
-  salesStatus: z.string().optional(),
-  salesRemark: z.string().optional(),
-  regStartDate: z.string().optional(),
-  regEndDate: z.string().optional(),
-  capacity: z.number().optional(),
-  autoApproval: z.number().optional(),
-  exhibitor: z.string().optional(),
-  
-  // User and tracking
-  changesMadeFrom: z.string().optional(),
-  addedBy: z.number().optional(),
-  qcBy: z.number().optional(),
-  bypassQC: z.boolean().optional(),
-  
-  // Future event
-  future: z.string().optional(), 
-  
-  // Contact management
-  contactAdd: z.string().optional(), 
-  contactDelete: z.string().optional(),
-    
-  // Creation flags
-  createUrl: z.number().optional(),
-  fromDashboard: z.number().optional(),
-  from: z.string().optional(),
-  subVenue: z.string().refine((val) => {
-    if (!val) return true; 
-    try {
-      const parsed = JSON.parse(val);
-      if (!Array.isArray(parsed)) return false;
-      return parsed.every(item => 
-        typeof item === 'number' || 
-        typeof item === 'string' ||
-        (typeof item === 'object' && item !== null && (item.id || item.name))
-      );
-    } catch {
-      return false;
-    }
+
+  salesAction: z.string().refine((date) => {
+    if (!date || date === '') return true;
+      const datetimeRegex = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])( ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9])?$/;
+    return datetimeRegex.test(date);
   }, {
-    message: 'subVenue must be a valid JSON array of sub-venue IDs or names',
+    message: 'salesAction must be in YYYY-MM-DD or YYYY-MM-DD HH:mm:ss format',
   }).optional(),
+
+  salesActionBy: z.number({
+    invalid_type_error: 'salesActionBy must be a number',
+  }).optional(),
+
+  salesStatus: z.string().optional(),
+
+  salesRemark: z.string().optional(),
+
+  eventSettings: eventSettingsValidation,
   
-  // Custom fields
+  contact: contactValidation,
+
+  subVenue: subVenueValidation,
+  
   customFlag: z.string().optional(),
   eepProcess: z.number().optional(),
   
-  // Removal operations
-  remove: z.literal('description').optional(),
 
-
-  // QC and Review fields
-  preReviewId: z.number().optional(),
-  vendorId: z.number().optional(),
-  remark: z.string().optional(),
-  enrichment: z.number().optional(),
-  Qcstatus: z.string().optional(),
-  blacklist_rule: z.number().optional(),
-  verified_categories: z.string().optional(),
-  functionality: z.enum(['open', 'private', 'draft']).optional(),
-  restrictionLevel: z.string().optional(),
-
-  // Additional QC workflow fields
-  noMail: z.number().optional(),
-  event_strength: z.string().optional(),
-  expiredControl: z.number().optional(),
+  visibility: z.enum(['private', 'draft']).optional(),
     
 }).refine((data) => {
-  // For creation (no id), validate required fields
-  if (!data.id) {
-    if (!data.name) return false;
-    if (!data.eventType && !data.type) return false;
-    if (!data.eventAbbrname && !data.abbrName) return false;
-    if (!data.desc && !data.description) return false;
-    if (!data.category) return false;
-    if (!data.when && (!data.startDate || !data.endDate)) return false;
-    if (!data.companyId && !data.company) return false;
-    if (!data.venueId && !data.venue) return false;
-  }
+  if (!data.eventId) return false;
   return true;
 }, {
   message: "Missing required fields for event creation"
 }).refine((data) => {
-  // Date validation: startDate should be less than endDate
   if (data.startDate && data.endDate) {
     const start = new Date(data.startDate);
     const end = new Date(data.endDate);

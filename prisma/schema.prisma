@@ -1115,6 +1115,7 @@ model city {
   utc_offset                                         Int?
   state_id                                           Int?
   timezone                                           String?               @db.VarChar(50)
+  country_city_countryTocountry                      country?              @relation("CityToCountry", fields: [country], references: [id], onDelete: Restrict, onUpdate: Restrict)
   city                                               city?                 @relation("cityTocity", fields: [orig_city], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "city_ibfk_1")
   other_city                                         city[]                @relation("cityTocity")
   area_values                                        area_values?          @relation(fields: [state_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "city_ibfk_2")
@@ -1680,6 +1681,7 @@ model country {
   continent                                                String?               @db.VarChar(45)
   sub_continent                                            Int?
   sub_continent1                                           Int?
+  cities                                                   city[]                @relation("CityToCountry")
   blacklist_domains                                        blacklist_domains[]
   company_company_countryTocountry                         company[]             @relation("company_countryTocountry")
   area_values                                              area_values?          @relation(fields: [sub_continent], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "area_values_fk")
@@ -6638,7 +6640,7 @@ model user {
   name                                                                 String?                        @db.VarChar(100)
   about                                                                String?                        @db.VarChar(200)
   membership                                                           Int?
-  company                                                              Int?
+  company                                                              Int?                           
   profile                                                              String?                        @db.VarChar(4000)
   linkedin_profile                                                     String?                        @db.LongText
   city                                                                 Int?
