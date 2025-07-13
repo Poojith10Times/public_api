@@ -208,15 +208,9 @@ export class ValidationService {
     message?: string;
   }> {
     try {
+      // First, get the venue
       const venue = await this.prisma.venue.findUnique({
-        where: { id: venueId },
-        include: {
-          city_venue_cityTocity: {
-            include: {
-              area_values: true
-            }
-          }
-        }
+        where: { id: venueId }
       });
 
       if (!venue) {
@@ -226,11 +220,45 @@ export class ValidationService {
         };
       }
 
+      // Then get the city and country separately
+      let city: any = null;
+      let country: any = null;
+
+      if (venue.city) {
+        city = await this.prisma.city.findUnique({
+          where: { id: venue.city },
+          include: {
+            area_values: true
+          }
+        });
+      }
+
+      if (venue.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: venue.country }
+        });
+      }
+
+      // If no country from venue, try to get it from city
+      if (!country && city && city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach the relationships manually
+      const venueWithRelations = {
+        ...venue,
+        city_venue_cityTocity: city,
+        country_venue_countryTocountry: country
+      };
+
       return {
         isValid: true,
-        venue,
+        venue: venueWithRelations,
       };
     } catch (error) {
+      console.error('Venue validation error:', error);
       return {
         isValid: false,
         message: 'Venue validation failed',
@@ -238,9 +266,6 @@ export class ValidationService {
     }
   }
 
-  /**
-   * Validate city exists
-   */
   async validateCity(cityId: number): Promise<{
     isValid: boolean;
     city?: any;
@@ -250,7 +275,7 @@ export class ValidationService {
       const city = await this.prisma.city.findUnique({
         where: { id: cityId },
         include: {
-          area_values: true 
+          area_values: true
         }
       });
 
@@ -261,11 +286,26 @@ export class ValidationService {
         };
       }
 
+      // Get country separately
+      let country: any = null;
+      if (city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach country relationship
+      const cityWithCountry = {
+        ...city,
+        country_city_countryTocountry: country
+      };
+
       return {
         isValid: true,
-        city,
+        city: cityWithCountry,
       };
     } catch (error) {
+      console.error('City validation error:', error);
       return {
         isValid: false,
         message: 'City validation failed',
@@ -514,11 +554,26 @@ export class ValidationService {
         };
       }
 
+      // Get country separately
+      let country: any = null;
+      if (city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach country relationship
+      const cityWithCountry = {
+        ...city,
+        country_city_countryTocountry: country
+      };
+
       return {
         isValid: true,
-        city
+        city: cityWithCountry
       };
     } catch (error) {
+      console.error('City resolution error:', error);
       return {
         isValid: false,
         message: 'City resolution failed'
@@ -563,6 +618,7 @@ export class ValidationService {
     message?: string;
   }> {
     try {
+      // First, get the venue
       const venue = await this.prisma.venue.findUnique({
         where: {
           url: venueUrl
@@ -576,11 +632,45 @@ export class ValidationService {
         };
       }
 
+      // Then get the city and country separately
+      let city: any = null;
+      let country: any = null;
+
+      if (venue.city) {
+        city = await this.prisma.city.findUnique({
+          where: { id: venue.city },
+          include: {
+            area_values: true
+          }
+        });
+      }
+
+      if (venue.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: venue.country }
+        });
+      }
+
+      // If no country from venue, try to get it from city
+      if (!country && city && city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach the relationships manually
+      const venueWithRelations = {
+        ...venue,
+        city_venue_cityTocity: city,
+        country_venue_countryTocountry: country
+      };
+
       return {
         isValid: true,
-        venue
+        venue: venueWithRelations
       };
     } catch (error) {
+      console.error('Venue resolution error:', error);
       return {
         isValid: false,
         message: 'Venue resolution failed'

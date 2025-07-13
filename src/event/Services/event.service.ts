@@ -2367,6 +2367,11 @@ private async processFutureAttachments(
             bulkOperations.push(this.processEventSettings(existingEvent.id, eventData.eventSettings, userId, tx));
           }
 
+          if (eventData.subVenue && typeof eventData.subVenue === 'string') {
+            bulkOperations.push(this.processSubVenues(existingEvent.id, editionId, eventData, userId, tx));
+          }
+
+
           // Execute all bulk operations in parallel where possible
           if (bulkOperations.length > 0) {
             await Promise.all(bulkOperations);
@@ -2403,6 +2408,7 @@ private async processFutureAttachments(
             );
           });
         }
+
 
         // Post-processing operations
         setImmediate(() => {
@@ -2506,14 +2512,14 @@ private async processFutureAttachments(
         });
       }
 
-      if (eventData.stats) {
-        console.log('Processing stats:', eventData.stats);
-        updates.push({
-          title: 'stats',
-          data_type: 'JSON',
-          value: typeof eventData.stats === 'string' ? eventData.stats : JSON.stringify(eventData.stats),
-        });
-      }
+      // if (eventData.stats) {
+      //   console.log('Processing stats:', eventData.stats);
+      //   updates.push({
+      //     title: 'stats',
+      //     data_type: 'JSON',
+      //     value: typeof eventData.stats === 'string' ? eventData.stats : JSON.stringify(eventData.stats),
+      //   });
+      // }
 
       const operations: Promise<any>[] = [];
 
@@ -3023,79 +3029,170 @@ private async processFutureAttachments(
       };
     }
   
-    private async validateUpdateLocation(eventData: EventUpsertRequestDto) {
-      if (eventData.venue === "0") {
-        return { isValid: true, removeVenue: true };
-      }
 
-      const venueId = eventData.venue;
-      if (venueId && venueId !== "0") {
-        if (typeof venueId === 'string') {
-          const venueValidation = await this.validationService.resolveVenueByUrl(venueId);
-          if (!venueValidation.isValid) {
-            return {
-              isValid: false,
-              message: venueValidation.message,
-            };
-          }
-          
-          return {
-            isValid: true,
-            venue: venueValidation.venue,
-            city: venueValidation.venue.city_venue_cityTocity,
-            country: venueValidation.venue.city_venue_cityTocity.country
-          };
-        } else {
-          const numericVenueId = typeof venueId === 'string' ? parseInt(venueId) : venueId;
-          const venueValidation = await this.validationService.validateVenue(numericVenueId);
-          if (!venueValidation.isValid) {
-            return venueValidation;
-          }
-          
-          return {
-            isValid: true,
-            venue: venueValidation.venue,
-            city: venueValidation.venue.city_venue_cityTocity,
-            country: venueValidation.venue.city_venue_cityTocity.country
-          };
-        }
-      }
-
-      if (eventData.city) {
-        if (typeof eventData.city === 'string') {
-          const cityResult = await this.validationService.resolveCityByUrl(eventData.city);
-          if (!cityResult.isValid) {
-            return {
-              isValid: false,
-              message: cityResult.message,
-            };
-          }
-          
-          return {
-            isValid: true,
-            cityId: cityResult.city!.id,
-            countryId: cityResult.city!.country,
-          };
-        } else {
-          const cityId = typeof eventData.city === 'string' ? parseInt(eventData.city) : eventData.city;
-          const cityValidation = await this.validationService.validateCity(cityId);
-          if (!cityValidation.isValid) {
-            return {
-              isValid: false,
-              message: cityValidation.message,
-            };
-          }
-          
-          return {
-            isValid: true,
-            cityId: cityValidation.city.id,
-            countryId: cityValidation.city.country,
-          };
-        }
-      }
-
-      return { isValid: true };
+  private async validateUpdateLocation(eventData: EventUpsertRequestDto) {
+    if (eventData.venue === "0") {
+      return { isValid: true, removeVenue: true };
     }
+
+    const venueId = eventData.venue;
+    if (venueId && venueId !== "0") {
+      if (typeof venueId === 'string') {
+        // Handle URL-based venue resolution
+        const venueValidation = await this.validationService.resolveVenueByUrl(venueId);
+        if (!venueValidation.isValid) {
+          return {
+            isValid: false,
+            message: venueValidation.message,
+          };
+        }
+        
+        const venue = venueValidation.venue;
+        
+        // Based on your schema, venue has direct relationships to both city and country
+        let city = venue.city_venue_cityTocity;
+        let country = venue.country_venue_countryTocountry;
+        
+        // If country is not loaded via venue, try to get it from city
+        if (!country && city && city.country_city_countryTocountry) {
+          country = city.country_city_countryTocountry;
+        }
+        
+        // Fallback: if still no country, fetch it directly
+        if (!country) {
+          if (venue.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: venue.country }
+            });
+          } else if (city && city.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: city.country }
+            });
+          }
+        }
+        
+        if (!city || !country) {
+          return {
+            isValid: false,
+            message: 'Unable to resolve city or country for the venue'
+          };
+        }
+        
+        return {
+          isValid: true,
+          venue: venue,
+          city: city,
+          country: country
+        };
+      } else {
+        // Handle numeric venue ID
+        const numericVenueId = typeof venueId === 'string' ? parseInt(venueId) : venueId;
+        const venueValidation = await this.validationService.validateVenue(numericVenueId);
+        if (!venueValidation.isValid) {
+          return venueValidation;
+        }
+        
+        const venue = venueValidation.venue;
+        let city = venue.city_venue_cityTocity;
+        let country = venue.country_venue_countryTocountry;
+        
+        // If country is not loaded via venue, try to get it from city
+        if (!country && city && city.country_city_countryTocountry) {
+          country = city.country_city_countryTocountry;
+        }
+        
+        // Fallback: if still no country, fetch it directly
+        if (!country) {
+          if (venue.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: venue.country }
+            });
+          } else if (city && city.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: city.country }
+            });
+          }
+        }
+        
+        if (!city || !country) {
+          return {
+            isValid: false,
+            message: 'Unable to resolve city or country for the venue'
+          };
+        }
+        
+        return {
+          isValid: true,
+          venue: venue,
+          city: city,
+          country: country
+        };
+      }
+    }
+
+    // Handle city-only resolution
+    if (eventData.city) {
+      if (typeof eventData.city === 'string') {
+        const cityResult = await this.validationService.resolveCityByUrl(eventData.city);
+        if (!cityResult.isValid) {
+          return {
+            isValid: false,
+            message: cityResult.message,
+          };
+        }
+        
+        const city = cityResult.city;
+        let country = city.country_city_countryTocountry;
+        
+        // Fallback if country relationship not loaded
+        if (!country && city.country) {
+          country = await this.prisma.country.findUnique({
+            where: { id: city.country }
+          });
+        }
+        
+        if (!country) {
+          return {
+            isValid: false,
+            message: 'Unable to resolve country for the city'
+          };
+        }
+        
+        return {
+          isValid: true,
+          city: city,
+          country: country
+        };
+      } else {
+        const cityId = typeof eventData.city === 'string' ? parseInt(eventData.city) : eventData.city;
+        const cityValidation = await this.validationService.validateCity(cityId);
+        if (!cityValidation.isValid) {
+          return {
+            isValid: false,
+            message: cityValidation.message,
+          };
+        }
+        
+        const city = cityValidation.city;
+        let country = city.country_city_countryTocountry;
+        
+        // Fallback if country relationship not loaded
+        if (!country && city.country) {
+          country = await this.prisma.country.findUnique({
+            where: { id: city.country }
+          });
+        }
+        
+        return {
+          isValid: true,
+          city: city,
+          country: country
+        };
+      }
+    }
+
+    return { isValid: true };
+  }
 
     private async processEventTypeUpdateWithUrl(eventData: EventUpsertRequestDto, existingEvent: any): Promise<{
       isValid: boolean;
@@ -4098,6 +4195,119 @@ private async processFutureAttachments(
     }
 
     return [...new Set(eventTypes)]; 
+  }
+
+  private async processSubVenues(
+  eventId: number,
+  editionId: number,
+  eventData: EventUpsertRequestDto,
+  userId: number,
+  tx: any
+): Promise<void> {
+  try {
+    // Type safety check
+    if (!eventData.subVenue || typeof eventData.subVenue !== 'string') {
+      this.logger.warn(`SubVenue processing skipped for event ${eventId}: invalid subVenue data`);
+      return;
+    }
+
+    this.logger.log(`Starting subVenue processing for event ${eventId}, edition ${editionId}`);
+    this.logger.log(`SubVenue data: ${eventData.subVenue}`);
+
+    // Get venue ID from multiple sources
+    let venueId: number | undefined;
+    
+    // 1. Check if venue was updated in this request
+    if (eventData.venue) {
+      this.logger.log(`Venue found in request data: ${eventData.venue}`);
+      if (typeof eventData.venue === 'number') {
+        venueId = eventData.venue;
+      } else if (typeof eventData.venue === 'string' && this.isNumeric(eventData.venue)) {
+        venueId = parseInt(eventData.venue);
+      }
+      this.logger.log(`Parsed venue ID from request: ${venueId}`);
+    } else {
+      this.logger.log(`No venue in request data, checking database...`);
+    }
+    
+    // 2. If no venue in request, get from current edition
+    if (!venueId) {
+      this.logger.log(`Checking current edition ${editionId} for venue...`);
+      const currentEdition = await tx.event_edition.findUnique({
+        where: { id: editionId },
+        select: { venue: true }
+      });
+      venueId = currentEdition?.venue || undefined;
+      this.logger.log(`Current edition venue: ${venueId}`);
+    }
+    
+    // 3. If still no venue, get from main event's current edition
+    if (!venueId) {
+      this.logger.log(`Checking main event ${eventId} for venue...`);
+      const event = await tx.event.findUnique({
+        where: { id: eventId },
+        include: {
+          event_edition_event_event_editionToevent_edition: {
+            select: { venue: true }
+          }
+        }
+      });
+      venueId = event?.event_edition_event_event_editionToevent_edition?.venue || undefined;
+      this.logger.log(`Main event current edition venue: ${venueId}`);
+    }
+
+    if (!venueId) {
+      this.logger.warn(`SubVenue processing skipped for event ${eventId}: no venue found after checking all sources`);
+      
+      // Let's also check what data we actually have
+      const debugEvent = await tx.event.findUnique({
+        where: { id: eventId },
+        include: {
+          event_edition_event_event_editionToevent_edition: {
+            select: { 
+              id: true,
+              venue: true,
+              city: true,
+              company_id: true 
+            }
+          }
+        }
+      });
+      
+      this.logger.log(`Debug - Event data:`, {
+        eventId: debugEvent?.id,
+        currentEdition: debugEvent?.event_edition_event_event_editionToevent_edition
+      });
+      
+      return;
+    }
+
+    this.logger.log(`Using venue ID: ${venueId} for subVenue processing`);
+
+    // Process sub-venues using CommonService
+    const result = await this.commonService.processSubVenues(
+      eventId,
+      editionId,
+      eventData.subVenue,
+      venueId,
+      userId,
+      tx
+    );
+
+    if (result.valid) {
+      this.logger.log(`Successfully processed ${result.subVenueIds?.length || 0} sub-venues for event ${eventId}`);
+    } else {
+      this.logger.warn(`SubVenue processing failed for event ${eventId}: ${result.message}`);
+    }
+  } catch (error) {
+    this.logger.error(`SubVenue processing error for event ${eventId}:`, error);
+    // Don't throw - this is not critical enough to fail the entire update
+  }
+}
+
+  // Add this helper method if it doesn't exist:
+  private isNumeric(value: any): boolean {
+    return !isNaN(Number(value)) && !isNaN(parseFloat(value.toString()));
   }
 
   private async processEventSettings(

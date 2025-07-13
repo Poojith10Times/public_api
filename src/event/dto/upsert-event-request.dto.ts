@@ -398,7 +398,7 @@ export const EventUpsertRequestSchema = z.object({
   description: z.string().optional(),
   shortDesc: z.string().optional(),  
   type: z.array(z.string().min(1)).optional(), 
- category: z.array(z.string()).max(2, 'Select at most 2 categories').optional(),  
+  category: z.array(z.string()).max(2, 'Select at most 2 categories').optional(),  
   startDate: dateValidation.optional(),
   endDate: dateValidation.optional(),
   

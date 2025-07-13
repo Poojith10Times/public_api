@@ -1690,31 +1690,111 @@ export class CommonService {
     }
   }
   
-  async processEventStats(
-    eventId: number,
-    editionId: number,
-    statsData: any,
-    userId: number,
-    prisma?: any
-  ): Promise<{ valid: boolean; message?: string }> {
-    try {
-      const db = prisma || this.prisma; 
-      let statsStructure = await this.getOrCreateStatsStructure(eventId, editionId, db);
-      let hasChanges = false;
-      let softError: string | undefined;
+  // async processEventStats(
+  //   eventId: number,
+  //   editionId: number,
+  //   statsData: any,
+  //   userId: number,
+  //   prisma?: any
+  // ): Promise<{ valid: boolean; message?: string }> {
+  //   try {
+  //     const db = prisma || this.prisma; 
+  //     let statsStructure = await this.getOrCreateStatsStructure(eventId, editionId, db);
+  //     let hasChanges = false;
+  //     let softError: string | undefined;
 
-      // Process stats from JSON format
-      if (statsData.stats) {
-        const decodedStats = typeof statsData.stats === 'string' 
-          ? JSON.parse(statsData.stats) 
-          : statsData.stats;
+  //     // Process stats from JSON format
+  //     if (statsData.stats) {
+  //       const decodedStats = typeof statsData.stats === 'string' 
+  //         ? JSON.parse(statsData.stats) 
+  //         : statsData.stats;
 
+  //       const allowedKeys = ['visitors', 'exhibitors', 'area'];
+  //       const providedKeys = Object.keys(decodedStats);
+  //       const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+        
+  //       if (invalidKeys.length > 0) {
+  //         softError = `Invalid keys in stats: ${invalidKeys.join(', ')}. Allowed keys are: ${allowedKeys.join(', ')}`;
+  //       }
+
+  //       if (decodedStats.visitors !== undefined && decodedStats.visitors !== null && decodedStats.visitors !== '') {
+  //         statsStructure.visitor.total_count = decodedStats.visitors;
+  //         hasChanges = true;
+  //       }
+
+  //       if (decodedStats.exhibitors !== undefined && decodedStats.exhibitors !== null && decodedStats.exhibitors !== '') {
+  //         statsStructure.exhibitor.total_count = decodedStats.exhibitors;
+  //         hasChanges = true;
+  //       }
+
+  //       if (decodedStats.area !== undefined && decodedStats.area !== null && decodedStats.area !== '') {
+  //         statsStructure.area.total_area = decodedStats.area;
+  //         hasChanges = true;
+  //       }
+  //     }
+
+  //     // Process individual visitor/exhibitor fields 
+  //     if (statsData.eventExhibitors !== undefined && this.isNumeric(statsData.eventExhibitors)) {
+  //       statsStructure.exhibitor.total_count = statsData.eventExhibitors;
+  //       hasChanges = true;
+  //     }
+
+  //     if (statsData.eventVisitors !== undefined && this.isNumeric(statsData.eventVisitors)) {
+  //       statsStructure.visitor.total_count = statsData.eventVisitors;
+  //       hasChanges = true;
+  //     }
+
+  //     // Handle empty values (set to empty string, not null)
+  //     if (statsData.eventExhibitors === '' || statsData.eventExhibitors === null) {
+  //       statsStructure.exhibitor.total_count = '';
+  //       hasChanges = true;
+  //     }
+
+  //     if (statsData.eventVisitors === '' || statsData.eventVisitors === null) {
+  //       statsStructure.visitor.total_count = '';
+  //       hasChanges = true;
+  //     }
+
+  //     if (hasChanges) {
+  //       await this.saveStatsToDatabase(eventId, editionId, statsStructure, userId, db);
+        
+  //       await this.updateEditionTotals(editionId, statsStructure, db);
+  //     }
+
+  //     return { valid: true };
+  //   } catch (error) {
+  //     return { 
+  //       valid: false, 
+  //       message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}' 
+  //     };
+  //   }
+  // }
+
+  // In common.service.ts - Fix processEventStats method
+
+async processEventStats(
+  eventId: number,
+  editionId: number,
+  statsData: any,
+  userId: number,
+  prisma?: any
+): Promise<{ valid: boolean; message?: string }> {
+  try {
+    const db = prisma || this.prisma; 
+    let statsStructure = await this.getOrCreateStatsStructure(eventId, editionId, db);
+    let hasChanges = false;
+
+    // Process stats from JSON format
+    if (typeof statsData === 'string') {
+      try {
+        const decodedStats = JSON.parse(statsData);
+        
         const allowedKeys = ['visitors', 'exhibitors', 'area'];
         const providedKeys = Object.keys(decodedStats);
         const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
         
         if (invalidKeys.length > 0) {
-          softError = `Invalid keys in stats: ${invalidKeys.join(', ')}. Allowed keys are: ${allowedKeys.join(', ')}`;
+          this.logger.warn(`Invalid keys in stats: ${invalidKeys.join(', ')}`);
         }
 
         if (decodedStats.visitors !== undefined && decodedStats.visitors !== null && decodedStats.visitors !== '') {
@@ -1731,44 +1811,91 @@ export class CommonService {
           statsStructure.area.total_area = decodedStats.area;
           hasChanges = true;
         }
+      } catch (error) {
+        this.logger.error('Failed to parse stats JSON:', error);
+        return { valid: false, message: 'Invalid JSON format in stats' };
       }
-
-      // Process individual visitor/exhibitor fields 
-      if (statsData.eventExhibitors !== undefined && this.isNumeric(statsData.eventExhibitors)) {
-        statsStructure.exhibitor.total_count = statsData.eventExhibitors;
+    } else if (typeof statsData === 'object') {
+      // Handle object format
+      if (statsData.visitors !== undefined) {
+        statsStructure.visitor.total_count = statsData.visitors;
         hasChanges = true;
       }
-
-      if (statsData.eventVisitors !== undefined && this.isNumeric(statsData.eventVisitors)) {
-        statsStructure.visitor.total_count = statsData.eventVisitors;
+      if (statsData.exhibitors !== undefined) {
+        statsStructure.exhibitor.total_count = statsData.exhibitors;
         hasChanges = true;
       }
-
-      // Handle empty values (set to empty string, not null)
-      if (statsData.eventExhibitors === '' || statsData.eventExhibitors === null) {
-        statsStructure.exhibitor.total_count = '';
+      if (statsData.area !== undefined) {
+        statsStructure.area.total_area = statsData.area;
         hasChanges = true;
       }
-
-      if (statsData.eventVisitors === '' || statsData.eventVisitors === null) {
-        statsStructure.visitor.total_count = '';
-        hasChanges = true;
-      }
-
-      if (hasChanges) {
-        await this.saveStatsToDatabase(eventId, editionId, statsStructure, userId, db);
-        
-        await this.updateEditionTotals(editionId, statsStructure, db);
-      }
-
-      return { valid: true };
-    } catch (error) {
-      return { 
-        valid: false, 
-        message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}' 
-      };
     }
+
+    if (hasChanges) {
+      // Save to event_data table
+      await this.saveStatsToDatabase(eventId, editionId, statsStructure, userId, db);
+      
+      // CRITICAL: Update edition totals
+      await this.updateEditionTotals(editionId, statsStructure, db);
+      
+      this.logger.log(`Updated stats for event ${eventId}, edition ${editionId}`);
+    }
+
+    return { valid: true };
+  } catch (error) {
+    this.logger.error('Stats processing failed:', error);
+    return { 
+      valid: false, 
+      message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}' 
+    };
   }
+}
+
+// Ensure updateEditionTotals method is working correctly
+private async updateEditionTotals(
+  editionId: number,
+  statsStructure: StatsStructure,
+  prisma?: any
+): Promise<void> {
+  const db = prisma || this.prisma;
+  const updateData: any = {};
+
+  if (statsStructure.exhibitor.total_count !== '') {
+    const value = this.isNumeric(statsStructure.exhibitor.total_count) 
+      ? Number(statsStructure.exhibitor.total_count) 
+      : null;
+    updateData.exhibitors_total = value;
+    this.logger.log(`Setting exhibitors_total to: ${value}`);
+  }
+
+  if (statsStructure.visitor.total_count !== '') {
+    const value = this.isNumeric(statsStructure.visitor.total_count) 
+      ? Number(statsStructure.visitor.total_count) 
+      : null;
+    updateData.visitors_total = value;
+    this.logger.log(`Setting visitors_total to: ${value}`);
+  }
+
+  if (statsStructure.area.total_area !== '') {
+    const value = this.isNumeric(statsStructure.area.total_area) 
+      ? Number(statsStructure.area.total_area) 
+      : null;
+    updateData.area_total = value;
+    this.logger.log(`Setting area_total to: ${value}`);
+  }
+
+  if (Object.keys(updateData).length > 0) {
+    this.logger.log(`Updating edition ${editionId} with:`, updateData);
+    await db.event_edition.update({
+      where: { id: editionId },
+      data: {
+        ...updateData,
+        modified: new Date(),
+      }
+    });
+    this.logger.log(`Edition totals updated successfully`);
+  }
+}
 
   private async getOrCreateStatsStructure(
     eventId: number, 
@@ -1861,39 +1988,39 @@ export class CommonService {
     }
   }
 
-  private async updateEditionTotals(
-    editionId: number,
-    statsStructure: StatsStructure,
-    prisma?: any
-  ): Promise<void> {
-    const db = prisma || this.prisma; 
-    const updateData: any = {};
+  // private async updateEditionTotals(
+  //   editionId: number,
+  //   statsStructure: StatsStructure,
+  //   prisma?: any
+  // ): Promise<void> {
+  //   const db = prisma || this.prisma; 
+  //   const updateData: any = {};
 
-    if (statsStructure.exhibitor.total_count !== '') {
-      updateData.exhibitors_total = this.isNumeric(statsStructure.exhibitor.total_count) 
-        ? Number(statsStructure.exhibitor.total_count) 
-        : null;
-    }
+  //   if (statsStructure.exhibitor.total_count !== '') {
+  //     updateData.exhibitors_total = this.isNumeric(statsStructure.exhibitor.total_count) 
+  //       ? Number(statsStructure.exhibitor.total_count) 
+  //       : null;
+  //   }
 
-    if (statsStructure.visitor.total_count !== '') {
-      updateData.visitors_total = this.isNumeric(statsStructure.visitor.total_count) 
-        ? Number(statsStructure.visitor.total_count) 
-        : null;
-    }
+  //   if (statsStructure.visitor.total_count !== '') {
+  //     updateData.visitors_total = this.isNumeric(statsStructure.visitor.total_count) 
+  //       ? Number(statsStructure.visitor.total_count) 
+  //       : null;
+  //   }
 
-    if (statsStructure.area.total_area !== '') {
-      updateData.area_total = this.isNumeric(statsStructure.area.total_area) 
-        ? Number(statsStructure.area.total_area) 
-        : null;
-    }
+  //   if (statsStructure.area.total_area !== '') {
+  //     updateData.area_total = this.isNumeric(statsStructure.area.total_area) 
+  //       ? Number(statsStructure.area.total_area) 
+  //       : null;
+  //   }
 
-    if (Object.keys(updateData).length > 0) {
-      await db.event_edition.update({
-        where: { id: editionId },
-        data: updateData
-      });
-    }
-  }
+  //   if (Object.keys(updateData).length > 0) {
+  //     await db.event_edition.update({
+  //       where: { id: editionId },
+  //       data: updateData
+  //     });
+  //   }
+  // }
 
 
   // private isNumeric(value: any): boolean {
@@ -2257,5 +2384,5 @@ export class CommonService {
     
     return !isNaN(Number(value)) && !isNaN(parseFloat(value.toString()));
   }
-
+  
 }
