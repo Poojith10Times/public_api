@@ -257,35 +257,7 @@ export class CommonService {
     }
   }
 
-  // // Process base64 image and upload 
-  // private async processBase64Image(
-  //   base64Data: string,
-  //   eventId: number,
-  //   type: string
-  // ): Promise<string | null> {
-  //   try {
-  //     // Extract image data
-  //     const matches = base64Data.match(/^data:image\/([a-zA-Z]*);base64,(.+)$/);
-  //     if (!matches || matches.length !== 3) {
-  //       return null;
-  //     }
 
-  //     const imageType = matches[1];
-  //     const imageData = matches[2];
-      
-  //     // Need to implement:
-  //     // 1. Decode base64 to buffer
-  //     // 2. Upload to S3/CDN
-  //     // 3. Return the CDN URL
-      
-  //     const fileName = `${eventId}_${type}_${Date.now()}.${imageType}`;
-  //     const cdnUrl = `https://cdn.10times.com/uploads/${fileName}`;
-      
-  //     return cdnUrl;
-  //   } catch (error) {
-  //     return null;
-  //   }
-  // }
 
   // Process other attachments (brochure, og_image, etc.)
   async processAttachment(
@@ -1191,129 +1163,6 @@ export class CommonService {
     }
   }
 
-//   async processEventProducts(
-//   eventId: number,
-//   editionId: number,
-//   productData: string,
-//   userId: number,
-//   prisma?: any // Add optional prisma parameter
-// ): Promise<{ categoryIds: number[]; softError?: string }> {
-//   const db = prisma || this.prisma; // Use transaction client if provided
-  
-//   try {
-    
-//     let products;
-//     try {
-//       products = JSON.parse(productData);
-//     } catch (parseError) {
-//       throw new Error('Invalid JSON format in product data');
-//     }
-
-//     const categoryIds: number[] = [];
-//     let softError: string | undefined;
-
-//     const existingProducts = await db.event_products.findMany({
-//       where: { event: eventId },
-//       include: { product_event_products_productToproduct: true }
-//     });
-
-//     let publishedCount = existingProducts.filter(p => p.published === 1).length;
-//     let unpublishedCount = existingProducts.filter(p => p.published === 0).length;
-
-//     await db.event_products.updateMany({
-//       where: { event: eventId },
-//       data: { published: 0 }
-//     });
-
-//     const uniqueProducts = new Set<number>();
-
-//     for (const [productKey, publishedStatus] of Object.entries(products)) {
-      
-//       if (publishedStatus === '1') {
-//         if (publishedCount >= 10) {
-//           softError = "Not able to add more than 10 product";
-//           continue;
-//         }
-//         publishedCount++;
-//       } else if (publishedStatus === '0') {
-//         if (unpublishedCount >= 4) {
-//           softError = 'Not able to add more than 4 unpublished product';
-//           continue;
-//         }
-//         unpublishedCount++;
-//       }
-
-//       // Find or create product
-//       let product;
-//       if (this.isNumeric(productKey)) {
-//         product = await db.product.findUnique({
-//           where: { id: parseInt(productKey) },
-//           include: { category_product_categoryTocategory: true }
-//         });
-//       } else {
-//         product = await db.product.findFirst({
-//           where: { name: productKey },
-//           include: { category_product_categoryTocategory: true }
-//         });
-
-//         if (!product && productKey.length <= 50) {
-//           product = await db.product.create({
-//             data: {
-//               name: productKey,
-//               created_by: userId,
-//               published: 1,
-//             },
-//             include: { category_product_categoryTocategory: true }
-//           });
-//         }
-//       }
-
-//       if (product && !uniqueProducts.has(product.id)) {
-//         uniqueProducts.add(product.id);
-
-//         const existingEventProduct = await db.event_products.findFirst({
-//           where: {
-//             event: eventId,
-//             product: product.id
-//           }
-//         });
-
-//         if (existingEventProduct) {
-//           await db.event_products.update({
-//             where: { id: existingEventProduct.id },
-//             data: {
-//               published: parseInt(publishedStatus as string),
-//               edition: editionId,
-//               modified: new Date(),
-//               modifiedby: userId,
-//             }
-//           });
-//         } else {
-//           await db.event_products.create({ 
-//             data: {
-//               event: eventId,
-//               edition: editionId,
-//               product: product.id,
-//               published: parseInt(publishedStatus as string),
-//               createdby: userId,
-//             }
-//           });
-//         }
-
-//         if (product.category_product_categoryTocategory && publishedStatus === '1') {
-//           categoryIds.push(product.category_product_categoryTocategory.id);
-//         }
-//       }
-//     }
-
-//     console.log('Product processing completed. Category IDs:', categoryIds);
-//     return { categoryIds, softError };
-//   } catch (error) {
-//     console.error('Product processing error:', error);
-//     throw new Error(`Invalid product format: ${error.message}`);
-//   }
-//   }
-
   async processEventProducts(
     eventId: number,
     editionId: number,
@@ -1495,105 +1344,6 @@ export class CommonService {
     }
   }
 
-  // async processEventCategories(
-  //   eventId: number,
-  //   categoryIds: number[],
-  //   userId: number,
-  //   verifiedCategories?: string,
-  //   vendorId?: number,
-  //   prisma?: any 
-  // ): Promise<void> {
-  //     const db = prisma || this.prisma; 
-  //   // STEP 1: Find categories to delete 
-  //   const categoriesToDeleteQuery = {
-  //     where: {
-  //       event: eventId,
-  //       category_event_category_categoryTocategory: {
-  //         is_group: false
-  //       },
-  //       ...(categoryIds.length > 0 && {
-  //         category: {
-  //           notIn: categoryIds
-  //         }
-  //       })
-  //     }
-  //   };
-
-  //   // Get the IDs first, then delete
-  //   const categoriesToDelete = await db.event_category.findMany({
-  //     ...categoriesToDeleteQuery,
-  //     select: { id: true }
-  //   });
-
-  //   // STEP 2: Delete the found categories
-  //   if (categoriesToDelete.length > 0) {
-  //     await db.event_category.deleteMany({
-  //       where: {
-  //         id: {
-  //           in: categoriesToDelete.map(c => c.id)
-  //         }
-  //       }
-  //     });
-  //   }
-
-  //   // STEP 3: Parse verified categories
-  //   let verifiedCategoryIds: number[] = [];
-  //   if (verifiedCategories) {
-  //     try {
-  //       verifiedCategoryIds = JSON.parse(verifiedCategories);
-  //     } catch {
-  //       // Handle parsing error silently
-  //     }
-  //   }
-
-  //   // STEP 4: Add new categories
-  //   for (const categoryId of categoryIds) {
-  //     const existingEventCategory = await db.event_category.findFirst({
-  //       where: {
-  //         event: eventId,
-  //         category: categoryId
-  //       }
-  //     });
-
-  //     if (existingEventCategory) {
-  //       // Update existing category
-  //       const updateData: any = {
-  //         modified: new Date(),
-  //         modifiedby: userId,
-  //       };
-
-  //       if (verifiedCategoryIds.includes(categoryId) && vendorId) {
-  //         updateData.verified_by = vendorId;
-  //         updateData.verified_on = new Date();
-  //       }
-
-  //       await db.event_category.update({
-  //         where: { id: existingEventCategory.id },
-  //         data: updateData
-  //       });
-  //     } else {
-  //       // Create new category
-  //       const createData: any = {
-  //         event: eventId,
-  //         category: categoryId,
-  //         createdby: userId,
-  //       };
-
-  //       if (verifiedCategoryIds.includes(categoryId) && vendorId) {
-  //         createData.verified_by = vendorId;
-  //         createData.verified_on = new Date();
-  //       }
-
-  //       await db.event_category.create({
-  //         data: createData
-  //       });
-  //     }
-  //   }
-  // }
-
-  // private isNumeric(value: string): boolean {
-  //   return !isNaN(Number(value)) && !isNaN(parseFloat(value));
-  // }
 
   async processEventCategories(
     eventId: number,
@@ -1690,88 +1440,6 @@ export class CommonService {
     }
   }
   
-  // async processEventStats(
-  //   eventId: number,
-  //   editionId: number,
-  //   statsData: any,
-  //   userId: number,
-  //   prisma?: any
-  // ): Promise<{ valid: boolean; message?: string }> {
-  //   try {
-  //     const db = prisma || this.prisma; 
-  //     let statsStructure = await this.getOrCreateStatsStructure(eventId, editionId, db);
-  //     let hasChanges = false;
-  //     let softError: string | undefined;
-
-  //     // Process stats from JSON format
-  //     if (statsData.stats) {
-  //       const decodedStats = typeof statsData.stats === 'string' 
-  //         ? JSON.parse(statsData.stats) 
-  //         : statsData.stats;
-
-  //       const allowedKeys = ['visitors', 'exhibitors', 'area'];
-  //       const providedKeys = Object.keys(decodedStats);
-  //       const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
-        
-  //       if (invalidKeys.length > 0) {
-  //         softError = `Invalid keys in stats: ${invalidKeys.join(', ')}. Allowed keys are: ${allowedKeys.join(', ')}`;
-  //       }
-
-  //       if (decodedStats.visitors !== undefined && decodedStats.visitors !== null && decodedStats.visitors !== '') {
-  //         statsStructure.visitor.total_count = decodedStats.visitors;
-  //         hasChanges = true;
-  //       }
-
-  //       if (decodedStats.exhibitors !== undefined && decodedStats.exhibitors !== null && decodedStats.exhibitors !== '') {
-  //         statsStructure.exhibitor.total_count = decodedStats.exhibitors;
-  //         hasChanges = true;
-  //       }
-
-  //       if (decodedStats.area !== undefined && decodedStats.area !== null && decodedStats.area !== '') {
-  //         statsStructure.area.total_area = decodedStats.area;
-  //         hasChanges = true;
-  //       }
-  //     }
-
-  //     // Process individual visitor/exhibitor fields 
-  //     if (statsData.eventExhibitors !== undefined && this.isNumeric(statsData.eventExhibitors)) {
-  //       statsStructure.exhibitor.total_count = statsData.eventExhibitors;
-  //       hasChanges = true;
-  //     }
-
-  //     if (statsData.eventVisitors !== undefined && this.isNumeric(statsData.eventVisitors)) {
-  //       statsStructure.visitor.total_count = statsData.eventVisitors;
-  //       hasChanges = true;
-  //     }
-
-  //     // Handle empty values (set to empty string, not null)
-  //     if (statsData.eventExhibitors === '' || statsData.eventExhibitors === null) {
-  //       statsStructure.exhibitor.total_count = '';
-  //       hasChanges = true;
-  //     }
-
-  //     if (statsData.eventVisitors === '' || statsData.eventVisitors === null) {
-  //       statsStructure.visitor.total_count = '';
-  //       hasChanges = true;
-  //     }
-
-  //     if (hasChanges) {
-  //       await this.saveStatsToDatabase(eventId, editionId, statsStructure, userId, db);
-        
-  //       await this.updateEditionTotals(editionId, statsStructure, db);
-  //     }
-
-  //     return { valid: true };
-  //   } catch (error) {
-  //     return { 
-  //       valid: false, 
-  //       message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}' 
-  //     };
-  //   }
-  // }
-
-  // In common.service.ts - Fix processEventStats method
-
 async processEventStats(
   eventId: number,
   editionId: number,
@@ -1988,45 +1656,6 @@ private async updateEditionTotals(
     }
   }
 
-  // private async updateEditionTotals(
-  //   editionId: number,
-  //   statsStructure: StatsStructure,
-  //   prisma?: any
-  // ): Promise<void> {
-  //   const db = prisma || this.prisma; 
-  //   const updateData: any = {};
-
-  //   if (statsStructure.exhibitor.total_count !== '') {
-  //     updateData.exhibitors_total = this.isNumeric(statsStructure.exhibitor.total_count) 
-  //       ? Number(statsStructure.exhibitor.total_count) 
-  //       : null;
-  //   }
-
-  //   if (statsStructure.visitor.total_count !== '') {
-  //     updateData.visitors_total = this.isNumeric(statsStructure.visitor.total_count) 
-  //       ? Number(statsStructure.visitor.total_count) 
-  //       : null;
-  //   }
-
-  //   if (statsStructure.area.total_area !== '') {
-  //     updateData.area_total = this.isNumeric(statsStructure.area.total_area) 
-  //       ? Number(statsStructure.area.total_area) 
-  //       : null;
-  //   }
-
-  //   if (Object.keys(updateData).length > 0) {
-  //     await db.event_edition.update({
-  //       where: { id: editionId },
-  //       data: updateData
-  //     });
-  //   }
-  // }
-
-
-  // private isNumeric(value: any): boolean {
-  //   if (value === null || value === undefined || value === '') return false;
-  //   return !isNaN(Number(value)) && !isNaN(parseFloat(value.toString()));
-  // }
 
   static validateStatsFormat(statsJson: string): boolean {
     try {
@@ -2036,77 +1665,6 @@ private async updateEditionTotals(
       return false;
     }
   }
-
-  // async processSubVenues(
-  //   eventId: number,
-  //   editionId: number,
-  //   subVenueData: string,
-  //   venueId: number,
-  //   userId: number
-  // ): Promise<{ valid: boolean; message?: string; subVenueIds?: number[] }> {
-  //   try {
-  //     // Validate that venue is provided
-  //     if (!venueId) {
-  //       return {
-  //         valid: false,
-  //         message: 'venue is required to map subVenue'
-  //       };
-  //     }
-
-  //     // Validate venue exists
-  //     const venue = await this.prisma.venue.findUnique({
-  //       where: { id: venueId },
-  //     });
-
-  //     if (!venue) {
-  //       return {
-  //         valid: false,
-  //         message: 'Invalid venue for sub-venue mapping'
-  //       };
-  //     }
-
-  //     // Parse sub-venue data
-  //     let subVenues: SubVenueInput[];
-  //     try {
-  //       subVenues = JSON.parse(subVenueData);
-  //       if (!Array.isArray(subVenues)) {
-  //         throw new Error('Sub-venues must be an array');
-  //       }
-  //     } catch {
-  //       return {
-  //         valid: false,
-  //         message: 'invalid format of json'
-  //       };
-  //     }
-
-  //     // Process each sub-venue
-  //     const subVenueIds: number[] = [];
-      
-  //     for (const subVenueInput of subVenues) {
-  //       const subVenueId = await this.findOrCreateSubVenue(subVenueInput, venueId);
-  //       if (subVenueId) {
-  //         subVenueIds.push(subVenueId);
-  //       }
-  //     }
-
-  //     // Remove duplicates 
-  //     const uniqueSubVenueIds = [...new Set(subVenueIds)];
-
-  //     // Save to event data
-  //     await this.saveSubVenuesToEventData(eventId, editionId, uniqueSubVenueIds, userId);
-
-  //     return {
-  //       valid: true,
-  //       subVenueIds: uniqueSubVenueIds
-  //     };
-
-  //   } catch (error) {
-  //     return {
-  //       valid: false,
-  //       message: 'Failed to process sub-venues'
-  //     };
-  //   }
-  // }
 
   async processSubVenues(
     eventId: number,
@@ -2182,55 +1740,6 @@ private async updateEditionTotals(
     }
   }
 
-  // private async findOrCreateSubVenue(
-  //   subVenueInput: SubVenueInput,
-  //   venueId: number
-  // ): Promise<number | null> {
-  //   try {
-  //     let subVenue: any = null;
-
-  //     // First try to find by ID if numeric value provided
-  //     if (this.isNumeric(subVenueInput)) {
-  //       const numericValue = typeof subVenueInput === 'string' 
-  //         ? parseInt(subVenueInput) 
-  //         : Number(subVenueInput);
-
-  //       subVenue = await this.prisma.sub_venue.findUnique({
-  //         where: { id: numericValue }
-  //       });
-  //     }
-
-  //     // If not found by ID, try to find by name
-  //     if (!subVenue && (subVenueInput.name || typeof subVenueInput === 'string')) {
-  //       const nameValue = subVenueInput.name || String(subVenueInput);
-        
-  //       subVenue = await this.prisma.sub_venue.findFirst({
-  //         where: { 
-  //           name: nameValue,
-  //           venue: venueId           }
-  //       });
-  //     }
-
-  //     if (!subVenue) {
-  //       const nameForCreation = subVenueInput.name || String(subVenueInput);
-        
-  //       subVenue = await this.prisma.sub_venue.create({
-  //         data: {
-  //           name: nameForCreation,
-  //           venue: venueId,
-  //           published: true,
-  //           createdby: 1,
-  //         }
-  //       });
-  //     }
-
-  //     return subVenue.id;
-
-  //   } catch (error) {
-  //     console.error('Error processing sub-venue:', error);
-  //     return null;
-  //   }
-  // }
 
   private async findOrCreateSubVenue(
     subVenueInput: SubVenueInput | string | number,
@@ -2290,47 +1799,6 @@ private async updateEditionTotals(
     }
   }
 
-  // private async saveSubVenuesToEventData(
-  //   eventId: number,
-  //   editionId: number,
-  //   subVenueIds: number[],
-  //   userId: number
-  // ): Promise<void> {
-  //   const subVenueJson = JSON.stringify(subVenueIds);
-
-  //   // Check if sub_venue data already exists
-  //   const existingSubVenueData = await this.prisma.event_data.findFirst({
-  //     where: {
-  //       event: eventId,
-  //       event_edition: editionId,
-  //       title: 'sub_venue'
-  //     }
-  //   });
-
-  //   if (existingSubVenueData) {
-  //     // Update existing
-  //     await this.prisma.event_data.update({
-  //       where: { id: existingSubVenueData.id },
-  //       data: {
-  //         value: subVenueJson,
-  //         modifiedby: userId,
-  //         modified: new Date(),
-  //       }
-  //     });
-  //   } else {
-  //     // Create new
-  //     await this.prisma.event_data.create({
-  //       data: {
-  //         event: eventId,
-  //         event_edition: editionId,
-  //         data_type: 'JSON',
-  //         title: 'sub_venue',
-  //         value: subVenueJson,
-  //         createdby: userId,
-  //       }
-  //     });
-  //   }
-  // }
 
   private async saveSubVenuesToEventData(
     eventId: number,
@@ -2384,5 +1852,5 @@ private async updateEditionTotals(
     
     return !isNaN(Number(value)) && !isNaN(parseFloat(value.toString()));
   }
-  
+
 }

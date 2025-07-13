@@ -191,742 +191,375 @@ export class EventService {
       }
     }
 
-    // private async handleAutoDetectedFutureEdition(
-    //   eventData: EventUpsertRequestDto, 
-    //   userId: number
-    // ): Promise<EventUpsertResponseDto> {
-    //   try {
-    //     console.log('Processing auto-detected future edition with full data processing');
-        
-    //     // Step 1: Validate all the data (same as regular update)
-    //     const validationResult = await this.validateEventUpdateData(eventData, userId);
-    //     if (!validationResult.isValid) {
-    //       return createErrorResponse(validationResult.messages);
-    //     }
-
-    //     const { existingEvent, company, location, eventTypeData, categoryData } = validationResult.validatedData!;
-        
-    //     // Step 2: Process the future edition transaction with ALL data
-    //     const result = await this.prisma.$transaction(async (tx) => {
-    //       // Check if there's an existing future edition for these dates
-    //       const existingFutureEdition = await tx.event_edition.findFirst({
-    //         where: {
-    //           event: eventData.eventId,
-    //           start_date: new Date(eventData.startDate!),
-    //           end_date: new Date(eventData.endDate!)
-    //         }
-    //       });
-          
-    //       let futureEdition;
-    //       let isNew = true;
-          
-    //       if (existingFutureEdition) {
-    //         // Update existing future edition
-    //         isNew = false;
-    //         const updateData: any = {
-    //           modified: new Date(),
-    //           modifiedby: userId,
-    //         };
-
-    //         // Update all possible edition fields
-    //         if (eventData.website) updateData.website = eventData.website;
-    //         if (eventData.eepProcess) updateData.eep_process = eventData.eepProcess;
-    //         if (location?.city) updateData.city = location.city.id;
-    //         if (location?.venue) updateData.venue = location.venue.id;
-    //         if (location?.removeVenue) updateData.venue = null;
-    //         if (company) updateData.company_id = company.id;
-    //         if (eventData.facebookId) updateData.facebook_id = eventData.facebookId;
-    //         if (eventData.linkedinId) updateData.linkedin_id = eventData.linkedinId;
-    //         if (eventData.twitterId) updateData.twitter_id = eventData.twitterId;
-    //         if (eventData.twitterHashTags) updateData.twitter_hashtag = eventData.twitterHashTags;
-    //         if (eventData.googleId) updateData.google_id = eventData.googleId;
-
-    //         await tx.event_edition.update({
-    //           where: { id: existingFutureEdition.id },
-    //           data: updateData
-    //         });
-            
-    //         futureEdition = existingFutureEdition;
-    //       } else {
-    //         // Create new future edition
-    //         let editionNumber = 1;
-            
-    //         const maxEdition = await tx.event_edition.findFirst({
-    //           where: { event: eventData.eventId! },
-    //           select: { edition_number: true },
-    //           orderBy: { edition_number: 'desc' }
-    //         });
-            
-    //         if (maxEdition && maxEdition.edition_number) {
-    //           editionNumber = maxEdition.edition_number + 1;
-    //         }
-            
-    //         futureEdition = await tx.event_edition.create({
-    //           data: {
-    //             event: eventData.eventId!,
-    //             start_date: new Date(eventData.startDate!),
-    //             end_date: new Date(eventData.endDate!),
-    //             company_id: company?.id,
-    //             venue: location?.venue?.id,
-    //             city: location?.city?.id,
-    //             edition_number: editionNumber,
-    //             createdby: userId,
-    //             website: eventData.website,
-    //             eep_process: eventData.eepProcess || 0,
-    //             online_event: (location?.city?.id) === 1 ? 1 : null,
-    //             facebook_id: eventData.facebookId,
-    //             linkedin_id: eventData.linkedinId,
-    //             twitter_id: eventData.twitterId,
-    //             twitter_hashtag: eventData.twitterHashTags,
-    //             google_id: eventData.googleId,
-    //           }
-    //         });
-    //       }
-          
-    //       // Step 3: Process ALL event data for future edition
-    //       await this.updateComplexEventData(eventData.eventId!, futureEdition.id, eventData, userId, tx);
-          
-    //       // Step 4: Process attachments for future edition
-    //       await this.processAttachments(eventData, eventData.eventId!, futureEdition.id, userId, tx);
-          
-    //       // Step 5: Process stats if provided
-    //       if (eventData.stats) {
-    //         const statsResult = await this.commonService.processEventStats(
-    //           eventData.eventId!,
-    //           futureEdition.id,
-    //           eventData.stats,
-    //           userId,
-    //           tx
-    //         );
-    //         if (!statsResult.valid) {
-    //           this.logger.warn(`Stats processing failed for future edition: ${statsResult.message}`);
-    //         }
-    //       }
-          
-    //       // Step 6: Process contacts if provided
-    //       if (eventData.contact) {
-    //         const contacts = JSON.parse(eventData.contact);
-    //         const validation = await this.commonService.validateContactEmails(contacts);
-            
-    //         if (!validation.valid) {
-    //           throw new Error(validation.message);
-    //         }
-
-    //         await this.commonService.addEventContacts(eventData.eventId!, eventData.contact, userId);
-    //       }
-
-    //       // Step 7: Process products if provided
-    //       let productCategoryIds: number[] = [];
-    //       if (eventData.product) {
-    //         try {
-    //           const productResult = await this.commonService.processEventProducts(
-    //             eventData.eventId!,
-    //             futureEdition.id,
-    //             eventData.product,
-    //             userId,
-    //             tx
-    //           );
-    //           productCategoryIds = productResult.categoryIds;
-              
-    //           this.logger.log(`Processed products for future edition ${futureEdition.id}`);
-    //         } catch (error) {
-    //           this.logger.error('Product processing failed for future edition:', error);
-    //           throw new Error(`Product processing failed: ${error.message}`);
-    //         }
-    //       }
-
-    //       // Step 8: Process categories (merge user categories with product categories)
-    //       if (eventData.category || productCategoryIds.length > 0) {
-    //         const userCategoryIds = categoryData?.categoryIds || [];
-    //         const allCategories = [...userCategoryIds, ...productCategoryIds];
-    //         const uniqueCategories = [...new Set(allCategories)];
-            
-    //         await this.commonService.processEventCategories(
-    //           eventData.eventId!,
-    //           uniqueCategories,
-    //           userId,
-    //           undefined,
-    //           undefined,
-    //           tx
-    //         );
-
-    //         this.logger.log(`Processed categories for future edition ${futureEdition.id}`);
-    //       }
-
-    //       // Step 9: Process event settings if provided
-    //       if (eventData.eventSettings) {
-    //         try {
-    //           const settingsResult = await this.processEventSettings(
-    //             eventData.eventId!,
-    //             eventData.eventSettings,
-    //             userId,
-    //             tx
-    //           );
-
-    //           if (!settingsResult.valid) {
-    //             this.logger.warn(`Event settings processing failed for future edition: ${settingsResult.message}`);
-    //           } else {
-    //             this.logger.log(`Event settings updated for future edition ${futureEdition.id}`);
-    //           }
-    //         } catch (error) {
-    //           this.logger.error('Event settings processing failed for future edition:', error);
-    //         }
-    //       }
-
-    //       // Step 10: Process sub-venues if provided
-    //       if (eventData.subVenue) {
-    //         let venueId: number | undefined;
-            
-    //         if (location?.venue?.id) {
-    //           venueId = location.venue.id;
-    //         } else if (typeof eventData.venue === 'number') {
-    //           venueId = eventData.venue;
-    //         } else {
-    //           // Try to get venue from future edition
-    //           venueId = futureEdition.venue || undefined;
-    //         }
-
-    //         if (venueId) {
-    //           const subVenueResult = await this.commonService.processSubVenues(
-    //             eventData.eventId!,
-    //             futureEdition.id,
-    //             eventData.subVenue,
-    //             venueId,
-    //             userId,
-    //             tx
-    //           );
-    //           if (!subVenueResult.valid) {
-    //             this.logger.warn(`SubVenue processing failed for future edition: ${subVenueResult.message}`);
-    //           }
-    //         }
-    //       }
-
-    //       // Step 11: Handle event type mappings if provided
-    //       if (eventTypeData?.eventTypeArray) {
-    //         // Note: Event types are typically at event level, not edition level
-    //         this.logger.log(`Event type data provided for future edition: ${eventTypeData.eventTypeArray.join(',')}`);
-    //       }
-
-    //       return {
-    //         valid: true,
-    //         message: isNew ? 'Future edition created successfully with all data' : 'Future edition updated successfully with all data',
-    //         editionId: futureEdition.id,
-    //         processedFields: {
-    //           basicData: true,
-    //           eventData: true,
-    //           attachments: true,
-    //           stats: !!eventData.stats,
-    //           contacts: !!eventData.contact,
-    //           products: !!eventData.product,
-    //           categories: !!(eventData.category || productCategoryIds.length > 0),
-    //           eventSettings: !!eventData.eventSettings,
-    //           subVenues: !!eventData.subVenue
-    //         }
-    //       };
-    //     }, {
-    //       maxWait: 20000,
-    //       timeout: 30000,
-    //     });
-        
-    //     if (!result.valid) {
-    //       return createErrorResponse([result.message ?? 'Future edition processing failed']);
-    //     }
-        
-    //     // Step 12: Post-processing operations
-    //     try {
-    //       // Send to RabbitMQ and Elasticsearch
-    //       await this.postProcessEvent(eventData.eventId!, result.editionId, eventData, true);
-    //     } catch (error) {
-    //       this.logger.warn('Post-processing failed for future edition:', error);
-    //     }
-        
-    //     return createSuccessResponse(
-    //       { 
-    //         eventId: eventData.eventId, 
-    //         edition: result.editionId,
-    //         futureEdition: true,
-    //         processedFields: result.processedFields
-    //       },
-    //       result.message ?? 'Future edition processed successfully with comprehensive data'
-    //     );
-        
-    //   } catch (error) {
-    //     console.error('Auto-detected future edition processing failed:', error);
-    //     return createErrorResponse([error.message || 'Future edition processing failed']);
-    //   }
-    // }
-
-    // private async handleAutoDetectedFutureEdition(
-    //   eventData: EventUpsertRequestDto, 
-    //   userId: number
-    // ): Promise<EventUpsertResponseDto> {
-    //   try {
-    //     console.log('Processing auto-detected future edition with optimized performance');
-        
-    //     // Step 1: Validate all the data (same as regular update)
-    //     const validationResult = await this.validateFutureEditionData(eventData, userId);
-    //     if (!validationResult.isValid) {
-    //       return createErrorResponse(validationResult.messages);
-    //     }
-
-    //     const { existingEvent, company, location, eventTypeData, categoryData } = validationResult.validatedData!;
-        
-    //     // Step 2: Pre-load existing data OUTSIDE transaction for better performance
-    //     const existingFutureEditionData = await this.preloadFutureEditionData(
-    //       eventData.eventId!,
-    //       eventData.startDate!,
-    //       eventData.endDate!
-    //     );
-
-    //     // Step 3: OPTIMIZED TRANSACTION - Only critical database operations
-    //     const result = await this.prisma.$transaction(async (tx) => {
-    //       let futureEdition;
-    //       let isNew = true;
-          
-    //       if (existingFutureEditionData.existingEdition) {
-    //         // Update existing future edition
-    //         isNew = false;
-    //         futureEdition = await this.updateExistingFutureEdition(
-    //           existingFutureEditionData.existingEdition,
-    //           eventData,
-    //           company,
-    //           location,
-    //           userId,
-    //           tx
-    //         );
-    //       } else {
-    //         // Create new future edition
-    //         futureEdition = await this.createNewFutureEdition(
-    //           eventData,
-    //           company,
-    //           location,
-    //           existingFutureEditionData.maxEditionNumber,
-    //           userId,
-    //           tx
-    //         );
-    //       }
-          
-    //       // Step 4: Optimized bulk data processing
-    //       await this.processFutureEditionDataBulk(
-    //         eventData.eventId!,
-    //         futureEdition.id,
-    //         eventData,
-    //         userId,
-    //         tx
-    //       );
-
-    //       // Step 5: Process all other operations in parallel
-    //       const bulkOperations: Promise<any>[] = [];
-
-    //       // Batch all non-critical operations
-    //       if (eventData.stats) {
-    //         bulkOperations.push(this.processFutureStats(
-    //           eventData.eventId!, futureEdition.id, eventData.stats, userId, tx
-    //         ));
-    //       }
-
-    //       if (eventData.contact) {
-    //         bulkOperations.push(this.processFutureContacts(
-    //           eventData.eventId!, eventData.contact, userId
-    //         ));
-    //       }
-
-    //       if (eventData.product || eventData.category) {
-    //         bulkOperations.push(this.processFutureProductsAndCategories(
-    //           eventData.eventId!, futureEdition.id, eventData, categoryData, userId, tx
-    //         ));
-    //       }
-
-    //       if (eventData.eventSettings) {
-    //         bulkOperations.push(this.processFutureEventSettings(
-    //           eventData.eventId!, eventData.eventSettings, userId, tx
-    //         ));
-    //       }
-
-    //       if (eventData.subVenue && this.getFutureVenueId(location, eventData, futureEdition)) {
-    //         bulkOperations.push(this.processFutureSubVenues(
-    //           eventData.eventId!, futureEdition.id, eventData.subVenue,
-    //           this.getFutureVenueId(location, eventData, futureEdition)!, userId, tx
-    //         ));
-    //       }
-
-    //       // Execute all operations in parallel
-    //       if (bulkOperations.length > 0) {
-    //         await Promise.all(bulkOperations);
-    //       }
-
-    //       return {
-    //         valid: true,
-    //         message: isNew ? 'Future edition created successfully with optimized processing' : 'Future edition updated successfully with optimized processing',
-    //         editionId: futureEdition.id,
-    //         isNew,
-    //         processedOperationsCount: bulkOperations.length
-    //       };
-    //     }, {
-    //       maxWait: 20000, 
-    //       timeout: 30000, 
-    //     });
-        
-    //     if (!result.valid) {
-    //       return createErrorResponse([result.message ?? 'Future edition processing failed']);
-    //     }
-        
-    //     // Step 6: Non-blocking post-processing operations
-    //     setImmediate(() => {
-    //       this.postProcessFutureEdition(eventData.eventId!, result.editionId, eventData);
-    //     });
-        
-    //     return createSuccessResponse(
-    //       { 
-    //         eventId: eventData.eventId, 
-    //         edition: result.editionId,
-    //         futureEdition: true,
-    //         optimizedProcessing: true,
-    //         operationsProcessed: result.processedOperationsCount
-    //       },
-    //       result.message ?? 'Future edition processed successfully with enhanced performance'
-    //     );
-        
-    //   } catch (error) {
-    //     console.error('Optimized future edition processing failed:', error);
-    //     return createErrorResponse([error.message || 'Future edition processing failed']);
-    //   }
-    // }
-
-    // PROPERLY OPTIMIZED handleAutoDetectedFutureEdition method
-
-private async handleAutoDetectedFutureEdition(
-  eventData: EventUpsertRequestDto, 
-  userId: number
-): Promise<EventUpsertResponseDto> {
-  try {
-    console.log('Processing auto-detected future edition with proper optimization');
-    
-    // Step 1: ALL VALIDATIONS OUTSIDE TRANSACTION
-    const validationResult = await this.validateFutureEditionData(eventData, userId);
-    if (!validationResult.isValid) {
-      return createErrorResponse(validationResult.messages);
-    }
-
-    const { existingEvent, company, location, eventTypeData, categoryData } = validationResult.validatedData!;
-    
-    // Step 2: PRE-LOAD DATA OUTSIDE TRANSACTION
-    const existingFutureEditionData = await this.preloadFutureEditionData(
-      eventData.eventId!,
-      eventData.startDate!,
-      eventData.endDate!
-    );
-
-    // Step 3: MINIMAL TRANSACTION - ONLY CRITICAL DATABASE WRITES
-    const coreResult = await this.prisma.$transaction(async (tx) => {
-      let futureEdition;
-      let isNew = true;
+  private async handleAutoDetectedFutureEdition(
+    eventData: EventUpsertRequestDto, 
+    userId: number
+  ): Promise<EventUpsertResponseDto> {
+    try {
+      console.log('Processing auto-detected future edition with proper optimization');
       
-      if (existingFutureEditionData.existingEdition) {
-        // Update existing future edition
-        isNew = false;
-        futureEdition = await this.updateExistingFutureEdition(
-          existingFutureEditionData.existingEdition,
-          eventData,
-          company,
-          location,
-          userId,
-          tx
-        );
-      } else {
-        // Create new future edition
-        futureEdition = await this.createNewFutureEdition(
-          eventData,
-          company,
-          location,
-          existingFutureEditionData.maxEditionNumber,
-          userId,
-          tx
-        );
+      // Step 1: ALL VALIDATIONS OUTSIDE TRANSACTION
+      const validationResult = await this.validateFutureEditionData(eventData, userId);
+      if (!validationResult.isValid) {
+        return createErrorResponse(validationResult.messages);
       }
-      
-      // ONLY CORE EVENT DATA IN TRANSACTION
-      await this.createCoreEventData(eventData.eventId!, futureEdition.id, eventData, userId, tx);
 
-      return {
-        valid: true,
-        message: isNew ? 'Future edition created successfully' : 'Future edition updated successfully',
-        editionId: futureEdition.id,
-        isNew
-      };
-    }, {
-      maxWait: 1000,   // Reduced timeout
-      timeout: 20000,  // Reduced timeout
-    });
-    
-    if (!coreResult.valid) {
-      return createErrorResponse([coreResult.message ?? 'Future edition processing failed']);
+      const { existingEvent, company, location, eventTypeData, categoryData } = validationResult.validatedData!;
+      
+      // Step 2: PRE-LOAD DATA OUTSIDE TRANSACTION
+      const existingFutureEditionData = await this.preloadFutureEditionData(
+        eventData.eventId!,
+        eventData.startDate!,
+        eventData.endDate!
+      );
+
+      // Step 3: MINIMAL TRANSACTION - ONLY CRITICAL DATABASE WRITES
+      const coreResult = await this.prisma.$transaction(async (tx) => {
+        let futureEdition;
+        let isNew = true;
+        
+        if (existingFutureEditionData.existingEdition) {
+          // Update existing future edition
+          isNew = false;
+          futureEdition = await this.updateExistingFutureEdition(
+            existingFutureEditionData.existingEdition,
+            eventData,
+            company,
+            location,
+            userId,
+            tx
+          );
+        } else {
+          // Create new future edition
+          futureEdition = await this.createNewFutureEdition(
+            eventData,
+            company,
+            location,
+            existingFutureEditionData.maxEditionNumber,
+            userId,
+            tx
+          );
+        }
+        
+        // ONLY CORE EVENT DATA IN TRANSACTION
+        await this.createCoreEventData(eventData.eventId!, futureEdition.id, eventData, userId, tx);
+
+        return {
+          valid: true,
+          message: isNew ? 'Future edition created successfully' : 'Future edition updated successfully',
+          editionId: futureEdition.id,
+          isNew
+        };
+      }, {
+        maxWait: 1000,   // Reduced timeout
+        timeout: 20000,  // Reduced timeout
+      });
+      
+      if (!coreResult.valid) {
+        return createErrorResponse([coreResult.message ?? 'Future edition processing failed']);
+      }
+
+      // Step 4: ALL COMPLEX OPERATIONS OUTSIDE TRANSACTION
+      await this.processComplexFutureEditionData(
+        eventData.eventId!,
+        coreResult.editionId,
+        eventData,
+        categoryData,
+        userId
+      );
+
+      // Step 5: NON-BLOCKING POST-PROCESSING
+      setImmediate(() => {
+        this.postProcessFutureEdition(eventData.eventId!, coreResult.editionId, eventData);
+      });
+      
+      return createSuccessResponse(
+        { 
+          eventId: eventData.eventId, 
+          edition: coreResult.editionId,
+          futureEdition: true,
+          isNew: coreResult.isNew
+        },
+        coreResult.message ?? 'Future edition processed successfully'
+      );
+      
+    } catch (error) {
+      console.error('Future edition processing failed:', error);
+      return createErrorResponse([error.message || 'Future edition processing failed']);
+    }
+  }
+
+  private async createCoreEventData(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number,
+    tx: any
+  ): Promise<void> {
+    const eventDataEntries: Array<{
+      title: string;
+      data_type: string;
+      value: string;
+    }> = [];
+
+    // Only add ESSENTIAL event data that must be in transaction
+    if (eventData.description) {
+      eventDataEntries.push({
+        title: 'desc',
+        data_type: 'TEXT',
+        value: eventData.description,
+      });
     }
 
-    // Step 4: ALL COMPLEX OPERATIONS OUTSIDE TRANSACTION
-    await this.processComplexFutureEditionData(
-      eventData.eventId!,
-      coreResult.editionId,
-      eventData,
-      categoryData,
-      userId
-    );
+    if (eventData.shortDesc) {
+      eventDataEntries.push({
+        title: 'short_desc',
+        data_type: 'TEXT',
+        value: eventData.shortDesc,
+      });
+    }
 
-    // Step 5: NON-BLOCKING POST-PROCESSING
-    setImmediate(() => {
-      this.postProcessFutureEdition(eventData.eventId!, coreResult.editionId, eventData);
-    });
-    
-    return createSuccessResponse(
-      { 
-        eventId: eventData.eventId, 
-        edition: coreResult.editionId,
-        futureEdition: true,
-        isNew: coreResult.isNew
-      },
-      coreResult.message ?? 'Future edition processed successfully'
-    );
-    
-  } catch (error) {
-    console.error('Future edition processing failed:', error);
-    return createErrorResponse([error.message || 'Future edition processing failed']);
-  }
-}
+    if (eventData.timing) {
+      eventDataEntries.push({
+        title: 'timing',
+        data_type: 'JSON',
+        value: typeof eventData.timing === 'string' ? eventData.timing : JSON.stringify(eventData.timing),
+      });
+    }
 
-// MINIMAL TRANSACTION - ONLY CORE DATA
-private async createCoreEventData(
-  eventId: number,
-  editionId: number,
-  eventData: EventUpsertRequestDto,
-  userId: number,
-  tx: any
-): Promise<void> {
-  const eventDataEntries: Array<{
-    title: string;
-    data_type: string;
-    value: string;
-  }> = [];
-
-  // Only add ESSENTIAL event data that must be in transaction
-  if (eventData.description) {
-    eventDataEntries.push({
-      title: 'desc',
-      data_type: 'TEXT',
-      value: eventData.description,
-    });
-  }
-
-  if (eventData.shortDesc) {
-    eventDataEntries.push({
-      title: 'short_desc',
-      data_type: 'TEXT',
-      value: eventData.shortDesc,
-    });
-  }
-
-  if (eventData.timing) {
-    eventDataEntries.push({
-      title: 'timing',
-      data_type: 'JSON',
-      value: typeof eventData.timing === 'string' ? eventData.timing : JSON.stringify(eventData.timing),
-    });
-  }
-
-  if (eventData.stats) {
-    eventDataEntries.push({
-      title: 'stats',
-      data_type: 'JSON',
-      value: typeof eventData.stats === 'string' ? eventData.stats : JSON.stringify(eventData.stats),
-    });
-  }
+    // if (eventData.stats) {
+    //   eventDataEntries.push({
+    //     title: 'stats',
+    //     data_type: 'JSON',
+    //     value: typeof eventData.stats === 'string' ? eventData.stats : JSON.stringify(eventData.stats),
+    //   });
+    // }
 
 
-  // Batch create all event data
-  if (eventDataEntries.length > 0) {
-    const createOperations = eventDataEntries.map(entry => 
-      tx.event_data.upsert({
-        where: {
-          event_event_edition_title: {
+    // Batch create all event data
+    if (eventDataEntries.length > 0) {
+      const createOperations = eventDataEntries.map(entry => 
+        tx.event_data.upsert({
+          where: {
+            event_event_edition_title: {
+              event: eventId,
+              event_edition: editionId,
+              title: entry.title
+            }
+          },
+          update: {
+            value: entry.value,
+            modifiedby: userId,
+            modified: new Date(),
+          },
+          create: {
             event: eventId,
             event_edition: editionId,
-            title: entry.title
+            data_type: entry.data_type,
+            title: entry.title,
+            value: entry.value,
+            createdby: userId,
           }
-        },
-        update: {
-          value: entry.value,
-          modifiedby: userId,
-          modified: new Date(),
-        },
-        create: {
-          event: eventId,
-          event_edition: editionId,
-          data_type: entry.data_type,
-          title: entry.title,
-          value: entry.value,
-          createdby: userId,
-        }
-      })
-    );
-
-    await Promise.all(createOperations);
-  }
-}
-
-// ALL COMPLEX OPERATIONS OUTSIDE TRANSACTION
-private async processComplexFutureEditionData(
-  eventId: number,
-  editionId: number,
-  eventData: EventUpsertRequestDto,
-  categoryData: any,
-  userId: number
-): Promise<void> {
-  const operations: Promise<any>[] = [];
-
-  // Process stats
-  if (eventData.stats) {
-    operations.push(this.processFutureStats(eventId, editionId, eventData.stats, userId));
-  }
-
-  // Process contacts (independent operation)
-  if (eventData.contact) {
-    operations.push(this.processFutureContacts(eventId, eventData.contact, userId));
-  }
-
-  // Process products and categories
-  if (eventData.product || eventData.category) {
-    operations.push(this.processFutureProductsAndCategories(
-      eventId, editionId, eventData, categoryData, userId
-    ));
-  }
-
-  // Process event settings
-  if (eventData.eventSettings) {
-    operations.push(this.processFutureEventSettings(eventId, eventData.eventSettings, userId));
-  }
-
-  // Process sub-venues
-  if (eventData.subVenue) {
-    const venueId = this.getFutureVenueId(null, eventData, { venue: null });
-    if (venueId) {
-      operations.push(this.processFutureSubVenues(eventId, editionId, eventData.subVenue, venueId, userId));
-    }
-  }
-
-  // Process attachments
-  operations.push(this.processFutureAttachments(eventId, editionId, eventData, userId));
-
-  // Execute all operations in parallel
-  if (operations.length > 0) {
-    await Promise.all(operations);
-  }
-}
-
-// INDEPENDENT OPERATIONS - NO TRANSACTION NEEDED
-private async processFutureStats(
-  eventId: number,
-  editionId: number,
-  statsData: any,
-  userId: number
-): Promise<void> {
-  try {
-    await this.commonService.processEventStats(eventId, editionId, statsData, userId);
-  } catch (error) {
-    this.logger.warn(`Stats processing failed for future edition: ${error.message}`);
-  }
-}
-
-private async processFutureContacts(
-  eventId: number,
-  contactsData: string,
-  userId: number
-): Promise<void> {
-  try {
-    const contacts = JSON.parse(contactsData);
-    const validation = await this.commonService.validateContactEmails(contacts);
-    
-    if (validation.valid) {
-      await this.commonService.addEventContacts(eventId, contactsData, userId);
-    } else {
-      this.logger.warn(`Contact validation failed for future edition: ${validation.message}`);
-    }
-  } catch (error) {
-    this.logger.error('Future edition contact processing failed:', error);
-  }
-}
-
-private async processFutureProductsAndCategories(
-  eventId: number,
-  editionId: number,
-  eventData: EventUpsertRequestDto,
-  categoryData: any,
-  userId: number
-): Promise<void> {
-  try {
-    let productCategoryIds: number[] = [];
-
-    // Process products first
-    if (eventData.product) {
-      const productResult = await this.commonService.processEventProducts(
-        eventId, editionId, eventData.product, userId
+        })
       );
-      productCategoryIds = productResult.categoryIds;
+
+      await Promise.all(createOperations);
+    }
+  }
+
+  private async processComplexFutureEditionData(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    categoryData: any,
+    userId: number
+  ): Promise<void> {
+    const operations: Promise<any>[] = [];
+
+    // Process stats
+    if (eventData.stats) {
+      operations.push(this.processFutureStats(eventId, editionId, eventData.stats, userId));
     }
 
-    // Process categories
-    if (eventData.category || productCategoryIds.length > 0) {
-      const userCategoryIds = categoryData?.categoryIds || [];
-      const allCategories = [...userCategoryIds, ...productCategoryIds];
-      const uniqueCategories = [...new Set(allCategories)];
+    // Process contacts (independent operation)
+    if (eventData.contact) {
+      operations.push(this.processFutureContacts(eventId, eventData.contact, userId));
+    }
+
+    // Process products and categories
+    if (eventData.product || eventData.category) {
+      operations.push(this.processFutureProductsAndCategories(
+        eventId, editionId, eventData, categoryData, userId
+      ));
+    }
+
+    // Process event settings
+    if (eventData.eventSettings) {
+      operations.push(this.processFutureEventSettings(eventId, eventData.eventSettings, userId));
+    }
+
+    // Process sub-venues
+    if (eventData.subVenue) {
+      // Get venue ID from the created edition
+      operations.push(this.processFutureSubVenuesWithQuery(eventId, editionId, eventData.subVenue, userId));
+    }
+
+    if (eventData.salesAction || eventData.salesActionBy || eventData.salesStatus || eventData.salesRemark) {
+      operations.push(this.processFutureSalesData(eventId, editionId, eventData, userId));
+    }
+
+    // Process attachments
+    operations.push(this.processFutureAttachments(eventId, editionId, eventData, userId));
+
+    // Execute all operations in parallel
+    if (operations.length > 0) {
+      await Promise.all(operations);
+    }
+  }
+
+  private async processFutureStats(
+    eventId: number,
+    editionId: number,
+    statsData: any,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.commonService.processEventStats(eventId, editionId, statsData, userId);
+    } catch (error) {
+      this.logger.warn(`Stats processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureSubVenuesWithQuery(
+    eventId: number,
+    editionId: number,
+    subVenueData: string,
+    userId: number
+  ): Promise<void> {
+    try {
+      // Query the actual venue ID from the created edition
+      const edition = await this.prisma.event_edition.findUnique({
+        where: { id: editionId },
+        select: { venue: true }
+      });
       
-      await this.commonService.processEventCategories(
-        eventId, uniqueCategories, userId
-      );
+      if (edition?.venue) {
+        await this.commonService.processSubVenues(
+          eventId, editionId, subVenueData, edition.venue, userId
+        );
+      } else {
+        this.logger.warn(`No venue found for sub-venue processing in edition ${editionId}`);
+      }
+    } catch (error) {
+      this.logger.warn(`Sub-venue processing failed for future edition: ${error.message}`);
     }
-  } catch (error) {
-    this.logger.error('Products/Categories processing failed for future edition:', error);
   }
-}
 
-private async processFutureEventSettings(
-  eventId: number,
-  eventSettingsData: string,
-  userId: number
-): Promise<void> {
-  try {
-    await this.processEventSettings(eventId, eventSettingsData, userId);
-  } catch (error) {
-    this.logger.warn(`Event settings processing failed for future edition: ${error.message}`);
+  private async processFutureSalesData(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.processSalesData(eventData, editionId, userId);
+    } catch (error) {
+      this.logger.warn(`Sales processing failed for future edition: ${error.message}`);
+    }
   }
-}
 
-private async processFutureSubVenues(
-  eventId: number,
-  editionId: number,
-  subVenueData: string,
-  venueId: number,
-  userId: number
-): Promise<void> {
-  try {
-    await this.commonService.processSubVenues(
-      eventId, editionId, subVenueData, venueId, userId
-    );
-  } catch (error) {
-    this.logger.warn(`SubVenue processing failed for future edition: ${error.message}`);
+  private async processFutureContacts(
+    eventId: number,
+    contactsData: string,
+    userId: number
+  ): Promise<void> {
+    try {
+      const contacts = JSON.parse(contactsData);
+      const validation = await this.commonService.validateContactEmails(contacts);
+      
+      if (validation.valid) {
+        await this.commonService.addEventContacts(eventId, contactsData, userId);
+      } else {
+        this.logger.warn(`Contact validation failed for future edition: ${validation.message}`);
+      }
+    } catch (error) {
+      this.logger.error('Future edition contact processing failed:', error);
+    }
   }
-}
 
-private async processFutureAttachments(
-  eventId: number,
-  editionId: number,
-  eventData: EventUpsertRequestDto,
-  userId: number
-): Promise<void> {
-  try {
-    await this.processAttachments(eventData, eventId, editionId, userId, null);
-  } catch (error) {
-    this.logger.warn(`Attachments processing failed for future edition: ${error.message}`);
+  private async processFutureProductsAndCategories(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    categoryData: any,
+    userId: number
+  ): Promise<void> {
+    try {
+      let productCategoryIds: number[] = [];
+
+      // Process products first
+      if (eventData.product) {
+        const productResult = await this.commonService.processEventProducts(
+          eventId, editionId, eventData.product, userId
+        );
+        productCategoryIds = productResult.categoryIds;
+      }
+
+      // Process categories
+      if (eventData.category || productCategoryIds.length > 0) {
+        const userCategoryIds = categoryData?.categoryIds || [];
+        const allCategories = [...userCategoryIds, ...productCategoryIds];
+        const uniqueCategories = [...new Set(allCategories)];
+        
+        await this.commonService.processEventCategories(
+          eventId, uniqueCategories, userId
+        );
+      }
+    } catch (error) {
+      this.logger.error('Products/Categories processing failed for future edition:', error);
+    }
   }
-}
+
+  private async processFutureEventSettings(
+    eventId: number,
+    eventSettingsData: string,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.processEventSettings(eventId, eventSettingsData, userId);
+    } catch (error) {
+      this.logger.warn(`Event settings processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureSubVenues(
+    eventId: number,
+    editionId: number,
+    subVenueData: string,
+    venueId: number,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.commonService.processSubVenues(
+        eventId, editionId, subVenueData, venueId, userId
+      );
+    } catch (error) {
+      this.logger.warn(`SubVenue processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureAttachments(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.processAttachments(eventData, eventId, editionId, userId, null);
+    } catch (error) {
+      this.logger.warn(`Attachments processing failed for future edition: ${error.message}`);
+    }
+  }
 
     private async validateFutureEditionData(eventData: EventUpsertRequestDto, userId: number): Promise<{
       isValid: boolean;
@@ -1015,8 +648,6 @@ private async processFutureAttachments(
           }
         }
 
-        // NO REHOST ANALYSIS - this is specifically for future editions
-
         return {
           isValid: messages.length === 0,
           messages,
@@ -1031,7 +662,6 @@ private async processFutureAttachments(
       }
     }
 
-    // Helper method to pre-load future edition data outside transaction
     private async preloadFutureEditionData(
       eventId: number,
       startDate: string,
@@ -1097,7 +727,14 @@ private async processFutureAttachments(
       // Batch all updates
       if (eventData.website) updateData.website = eventData.website;
       if (eventData.eepProcess) updateData.eep_process = eventData.eepProcess;
-      if (location?.city) updateData.city = location.city.id;
+      if (location?.city) {
+        updateData.city = location.city.id;
+        if (location.city.id === 1) {
+          updateData.online_event = 1;
+        } else {
+          updateData.online_event = null;
+        }
+      }    
       if (location?.venue) updateData.venue = location.venue.id;
       if (location?.removeVenue) updateData.venue = null;
       if (company) updateData.company_id = company.id;
@@ -1108,6 +745,9 @@ private async processFutureAttachments(
       if (eventData.twitterId) updateData.twitter_id = eventData.twitterId;
       if (eventData.twitterHashTags) updateData.twitter_hashtag = eventData.twitterHashTags;
       if (eventData.googleId) updateData.google_id = eventData.googleId;
+      if (eventData.customFlag) {
+        updateData.custom_flag = eventData.customFlag;
+      }
 
       await tx.event_edition.update({
         where: { id: existingEdition.id },
@@ -1152,136 +792,33 @@ private async processFutureAttachments(
       return futureEdition;
     }
 
-    // Optimized bulk processing of future edition data
-    private async processFutureEditionDataBulk(
-      eventId: number,
-      editionId: number,
-      eventData: EventUpsertRequestDto,
-      userId: number,
-      tx: any
-    ): Promise<void> {
-      // Reuse the existing optimized updateEventData method
-      const existingDataMap = new Map(); // Future editions typically don't have existing data
-      await this.updateEventData(eventId, editionId, eventData, userId, existingDataMap, tx);
-      
-      // Process attachments in parallel
-      await this.processAttachments(eventData, eventId, editionId, userId, tx);
-    }
 
-    // Optimized future stats processing
-    // private async processFutureStats(
-    //   eventId: number,
-    //   editionId: number,
-    //   statsData: any,
-    //   userId: number,
-    //   tx: any
-    // ): Promise<void> {
-    //   try {
-    //     await this.commonService.processEventStats(eventId, editionId, statsData, userId, tx);
-    //   } catch (error) {
-    //     this.logger.warn(`Stats processing failed for future edition: ${error.message}`);
-    //   }
-    // }
-
-    // // Optimized future contacts processing (moved outside transaction)
-    // private async processFutureContacts(
-    //   eventId: number,
-    //   contactsData: string,
-    //   userId: number
-    // ): Promise<void> {
-    //   setImmediate(async () => {
-    //     try {
-    //       const contacts = JSON.parse(contactsData);
-    //       const validation = await this.commonService.validateContactEmails(contacts);
-          
-    //       if (validation.valid) {
-    //         await this.commonService.addEventContacts(eventId, contactsData, userId);
-    //       } else {
-    //         this.logger.warn(`Contact validation failed for future edition: ${validation.message}`);
-    //       }
-    //     } catch (error) {
-    //       this.logger.error('Future edition contact processing failed:', error);
-    //     }
-    //   });
-    // }
-
-    // // Optimized future products and categories processing
-    // private async processFutureProductsAndCategories(
-    //   eventId: number,
-    //   editionId: number,
-    //   eventData: EventUpsertRequestDto,
-    //   categoryData: any,
-    //   userId: number,
-    //   tx: any
-    // ): Promise<void> {
-    //   let productCategoryIds: number[] = [];
-
-    //   // Process products first
-    //   if (eventData.product) {
-    //     try {
-    //       const productResult = await this.commonService.processEventProducts(
-    //         eventId, editionId, eventData.product, userId, tx
-    //       );
-    //       productCategoryIds = productResult.categoryIds;
-    //     } catch (error) {
-    //       this.logger.error('Product processing failed for future edition:', error);
-    //       throw new Error(`Product processing failed: ${error.message}`);
-    //     }
-    //   }
-
-    //   // Process categories
-    //   if (eventData.category || productCategoryIds.length > 0) {
-    //     const userCategoryIds = categoryData?.categoryIds || [];
-    //     const allCategories = [...userCategoryIds, ...productCategoryIds];
-    //     const uniqueCategories = [...new Set(allCategories)];
-        
-    //     await this.commonService.processEventCategories(
-    //       eventId, uniqueCategories, userId, undefined, undefined, tx
-    //     );
-    //   }
-    // }
-
-    // // Optimized future event settings processing
-    // private async processFutureEventSettings(
-    //   eventId: number,
-    //   eventSettingsData: string,
-    //   userId: number,
-    //   tx: any
-    // ): Promise<void> {
-    //   try {
-    //     await this.processEventSettings(eventId, eventSettingsData, userId, tx);
-    //   } catch (error) {
-    //     this.logger.warn(`Event settings processing failed for future edition: ${error.message}`);
-    //   }
-    // }
-
-    // // Optimized future sub-venues processing
-    // private async processFutureSubVenues(
-    //   eventId: number,
-    //   editionId: number,
-    //   subVenueData: string,
-    //   venueId: number,
-    //   userId: number,
-    //   tx: any
-    // ): Promise<void> {
-    //   try {
-    //     await this.commonService.processSubVenues(
-    //       eventId, editionId, subVenueData, venueId, userId, tx
-    //     );
-    //   } catch (error) {
-    //     this.logger.warn(`SubVenue processing failed for future edition: ${error.message}`);
-    //   }
-    // }
-
-    // Helper to get venue ID for future edition
     private getFutureVenueId(location: any, eventData: EventUpsertRequestDto, futureEdition: any): number | undefined {
+      // REPLACE ENTIRE METHOD WITH:
+      
+      // 1. First check if venue was provided in request
       if (location?.venue?.id) {
         return location.venue.id;
-      } else if (typeof eventData.venue === 'number') {
-        return eventData.venue;
-      } else {
-        return futureEdition.venue || undefined;
       }
+      
+      // 2. Check if venue is a number in eventData
+      if (typeof eventData.venue === 'number') {
+        return eventData.venue;
+      }
+      
+      // 3. Try to resolve venue from validation result
+      if (typeof eventData.venue === 'string') {
+        // This means venue was validated and should be in location
+        return location?.venue?.id;
+      }
+      
+      // 4. Get venue from the created future edition
+      if (futureEdition?.venue) {
+        return futureEdition.venue;
+      }
+      
+      // 5. Last resort: query the actual edition from DB
+      return undefined;
     }
 
     // Non-blocking post-processing for future editions
@@ -1299,861 +836,6 @@ private async processFutureAttachments(
         this.logger.warn('Post-processing failed for future edition:', error);
       }
     }
-
-    private async validateFutureEditionDataFromAuto(
-      eventData: EventUpsertRequestDto,
-      futureData: any
-    ): Promise<{
-      isValid: boolean;
-      messages: string[];
-      validatedData?: {
-        future: any;
-        company: any;
-        venue: any;
-        city: any;
-        originalEdition: any;
-      };
-    }> {
-      const messages: string[] = [];
-      let validatedData: any = {};
-      
-      try {
-        validatedData.future = futureData;
-        
-        // Validate event exists
-        const eventValidation = await this.validationService.validateEventExists(eventData.eventId!);
-        if (!eventValidation.isValid) {
-          messages.push(eventValidation.message ?? 'Event validation failed');
-        }
-        
-        // Validate dates
-        const dateValidation = this.validationService.validateDates(
-          futureData.startDate,
-          futureData.endDate
-        );
-        if (!dateValidation.isValid) {
-          messages.push(dateValidation.message ?? 'Date validation failed');
-        }
-        
-        // Validate website if provided
-        if (futureData.website && !this.validationService.validateWebsiteFormat(futureData.website)) {
-          messages.push('website is not in correct format');
-        }
-        
-        // Validate date conflicts
-        const conflictValidation = await this.validationService.validateDateConflicts(
-          eventData.eventId!,
-          futureData.startDate,
-          futureData.endDate
-        );
-        if (!conflictValidation.isValid) {
-          messages.push(conflictValidation.message ?? 'Date conflict validation failed');
-        }
-        
-        // Validate company, venue, city (reuse existing logic)
-        let company = null;
-        if (futureData.companyId) {
-          const companyValidation = await this.validationService.validateCompany(futureData.companyId);
-          if (!companyValidation.isValid) {
-            messages.push('company does not exist');
-          } else {
-            company = companyValidation.company;
-          }
-        }
-        validatedData.company = company;
-        
-        // Get original edition
-        const originalEdition = await this.prisma.event_edition.findFirst({
-          where: { event: eventData.eventId! },
-          orderBy: { created: 'asc' }
-        });
-        validatedData.originalEdition = originalEdition;
-        
-        // Handle venue/city validation (reuse existing logic)
-        validatedData.venue = null;
-        validatedData.city = null;
-        
-        return {
-          isValid: messages.length === 0,
-          messages,
-          validatedData: messages.length === 0 ? validatedData : undefined,
-        };
-        
-      } catch (error) {
-        return {
-          isValid: false,
-          messages: ['Future edition validation failed'],
-        };
-      }
-    }
-
-  // private async handleFutureEdition(eventData: EventUpsertRequestDto, userId: number): Promise<EventUpsertResponseDto> {
-  //   try {
-  //     // Step 1: Basic input validation
-  //     if (!eventData.eventId) {
-  //       return createErrorResponse(['Event ID is required for future edition']);
-  //     }
-
-  //     if (!eventData.future) {
-  //       return createErrorResponse(['Future edition data is required']);
-  //     }
-
-  //     // Step 2: Parse and validate all data in one go
-  //     const validationResult = await this.validateFutureEditionData(eventData);
-  //     if (!validationResult.isValid) {
-  //       return createErrorResponse(validationResult.messages);
-  //     }
-
-  //     // Step 3: Process transaction with validated data 
-  //     const { future, company, venue, city, originalEdition } = validationResult.validatedData!;
-
-  //     const result = await this.prisma.$transaction(async (tx) => {
-  //       let futureEdition;
-  //       let isNew = true;
-
-  //       if (future.editionId) {
-  //         // Update existing future edition
-  //         futureEdition = await tx.event_edition.findUnique({
-  //           where: { id: parseInt(future.editionId) }
-  //         });
-
-  //         if (!futureEdition) {
-  //           throw new Error('invalid editionId');
-  //         }
-
-  //         isNew = false;
-          
-  //         await tx.event_edition.update({
-  //           where: { id: futureEdition.id },
-  //           data: {
-  //             start_date: new Date(future.startDate),
-  //             end_date: new Date(future.endDate),
-  //             modified: new Date(),
-  //             modifiedby: userId,
-  //             website: future.website,
-  //             eep_process: eventData.eepProcess,
-  //             city: city?.id || city,
-  //           }
-  //         });
-  //       } else {
-  //       let editionNumber = 1;
-        
-  //       if (originalEdition && originalEdition.edition_number) {
-  //         editionNumber = originalEdition.edition_number + 1;
-  //       } else {
-  //           const maxEdition = await tx.event_edition.findFirst({
-  //             where: { event: eventData.eventId },
-  //             select: { edition_number: true },
-  //             orderBy: { edition_number: 'desc' }
-  //           });
-            
-  //           if (maxEdition && maxEdition.edition_number) {
-  //             editionNumber = maxEdition.edition_number + 1;
-  //           }
-  //         }
-
-  //         futureEdition = await tx.event_edition.create({
-  //           data: {
-  //             event: eventData.eventId!,
-  //             start_date: new Date(future.startDate),
-  //             end_date: new Date(future.endDate),
-  //             company_id: company?.id,
-  //             venue: venue?.id,
-  //             city: city?.id || city,
-  //             edition_number: editionNumber, // Auto-calculated
-  //             createdby: userId,
-  //             website: future.website,
-  //             eep_process: eventData.eepProcess || 0,
-  //             online_event: (city?.id || city) === 1 ? 1 : null,
-  //           }
-  //         });
-  //       }
-
-  //       // Handle timing data
-  //       if (future.timing) {
-  //         await this.upsertEventData(
-  //           tx, 
-  //           eventData.eventId!, 
-  //           futureEdition.id, 
-  //           'timing', 
-  //           'JSON', 
-  //           future.timing, 
-  //           userId
-  //         );
-  //       }
-
-  //       // Handle description
-  //       if (future.description) {
-  //         await this.upsertEventData(
-  //           tx, 
-  //           eventData.eventId!, 
-  //           futureEdition.id, 
-  //           'desc', 
-  //           'TEXT', 
-  //           future.description, 
-  //           userId
-  //         );
-  //       }
-
-  //       // Handle short description
-  //       if (future.short_desc) {
-  //         await this.upsertEventData(
-  //           tx, 
-  //           eventData.eventId!, 
-  //           futureEdition.id, 
-  //           'short_desc', 
-  //           'TEXT', 
-  //           future.short_desc, 
-  //           userId
-  //         );
-  //       }
-
-  //       return {
-  //         valid: true,
-  //         message: isNew ? 'successfully added' : 'successfully updated',
-  //         editionId: futureEdition.id
-  //       };
-  //     }, {
-  //       maxWait: 5000,
-  //       timeout: 10000,
-  //     });
-
-  //     if (!result.valid) {
-  //       return createErrorResponse([result.message ?? 'Future edition processing failed']);
-  //     }
-
-  //     return createSuccessResponse(
-  //       { eventId: eventData.eventId, edition: result.editionId },
-  //       result.message ?? 'Future edition processed successfully'
-  //     );
-
-  //   } catch (error) {
-  //     return createErrorResponse([error.message || 'Future edition processing failed']);
-  //   }
-  // }
-  
-
-  // private async validateFutureEditionData(eventData: EventUpsertRequestDto): Promise<{
-  //   isValid: boolean;
-  //   messages: string[];
-  //   validatedData?: {
-  //     future: FutureEventData;
-  //     company: any;
-  //     venue: any;
-  //     city: any;
-  //     originalEdition: any;
-  //   };
-  // }> {
-  //   const messages: string[] = [];
-  //   let validatedData: any = {};
-
-  //   try {
-  //     // Parse future data
-  //     const future: FutureEventData = JSON.parse(eventData.future!);
-  //     validatedData.future = future;
-
-  //     // Validate event exists
-  //     const eventValidation = await this.validationService.validateEventExists(eventData.eventId!);
-  //     if (!eventValidation.isValid) {
-  //       messages.push(eventValidation.message ?? 'Event validation failed');
-  //     }
-
-  //     // Validate dates format
-  //     const dateValidation = this.validationService.validateDates(
-  //       future.startDate,
-  //       future.endDate
-  //     );
-  //     if (!dateValidation.isValid) {
-  //       messages.push(dateValidation.message ?? 'Unknown date validation error');
-  //     }
-
-  //     // Validate website format
-  //     if (future.website && !this.validationService.validateWebsiteFormat(future.website)) {
-  //       messages.push('website is not in correct format');
-  //     }
-
-  //     // Validate future dates are greater than current date
-  //     const futureStart = new Date(future.startDate);
-  //     const futureEnd = new Date(future.endDate);
-  //     const now = new Date();
-
-  //     if ((futureEnd <= now || futureStart <= now) && future.expiredControl !== 1) {
-  //       messages.push('please mention the Dates greater than current');
-  //     }
-
-  //     if (futureEnd < futureStart) {
-  //       messages.push('Start date should be greater than end date');
-  //     }
-
-  //     // Validate date conflicts with existing editions
-  //     const conflictValidation = await this.validationService.validateDateConflicts(
-  //       eventData.eventId!,
-  //       future.startDate,
-  //       future.endDate,
-  //       future.editionId ? parseInt(future.editionId) : undefined
-  //     );
-  //     if (!conflictValidation.isValid) {
-  //       messages.push(conflictValidation.message ?? 'Date conflict validation error');
-  //     }
-
-  //     // Validate company if provided
-  //     let company = null;
-  //     if (future.companyId) {
-  //       let companyInput: string | number;
-        
-  //       if (isNaN(Number(future.companyId))) {
-  //         companyInput = future.companyId;
-  //       } else {
-  //         companyInput = parseInt(future.companyId);
-  //       }
-
-  //       const companyValidation = await this.validationService.validateCompany(companyInput);
-  //       if (!companyValidation.isValid) {
-  //         messages.push('company does not exist');
-  //       } else {
-  //         company = companyValidation.company;
-  //       }
-  //     }
-  //     validatedData.company = company;
-
-  //     // Validate venue if provided
-  //     let venue: { id: number; city: number; city_venue_cityTocity?: any } | null = null;
-  //     if (future.venue) {
-  //       const venueValidation = await this.validationService.validateVenue(
-  //         parseInt(future.venue)
-  //       );
-  //       if (!venueValidation.isValid) {
-  //         messages.push('venue does not exist');
-  //       } else {
-  //         venue = venueValidation.venue;
-  //       }
-  //     }
-  //     validatedData.venue = venue;
-
-  //     // Validate city if provided
-  //     let city = null;
-  //     if (future.city) {
-  //       const cityValidation = await this.validationService.validateCity(
-  //         parseInt(future.city)
-  //       );
-  //       if (!cityValidation.isValid) {
-  //         messages.push('city does not exist');
-  //       } else {
-  //         city = cityValidation.city;
-  //       }
-  //     }
-
-  //     // Validate city-venue relationship
-  //     if (city && venue) {
-  //       const cityObj = city as { id: number; [key: string]: any };
-  //       const venueObj = venue as { city: number; [key: string]: any };
-        
-  //       if (cityObj.id !== venueObj.city) {
-  //         messages.push('city does not match with venue');
-  //       }
-  //     }
-
-  //     // Use venue's city if city not provided
-  //     if (!city && venue && venue.city_venue_cityTocity) {
-  //       city = venue.city_venue_cityTocity;
-  //     }
-
-  //     // Get original edition for location validation
-  //     const originalEdition = await this.prisma.event_edition.findFirst({
-  //       where: { event: eventData.eventId! },
-  //       orderBy: { created: 'asc' }
-  //     });
-  //     validatedData.originalEdition = originalEdition;
-
-  //     // Validate location proximity if needed
-  //     if (city && originalEdition?.city) {
-  //       const originalCity = await this.prisma.city.findUnique({
-  //         where: { id: originalEdition.city }
-  //       });
-
-  //       if (originalCity) {
-  //         const locationValidation = await this.validateLocationProximity(
-  //           originalCity,
-  //           city
-  //         );
-  //         if (!locationValidation.valid) {
-  //           messages.push(locationValidation.message || 'Location proximity validation failed');
-  //         }
-  //       }
-  //     }
-
-  //     // Set final city value
-  //     validatedData.city = city || originalEdition?.city;
-
-  //     return {
-  //       isValid: messages.length === 0,
-  //       messages,
-  //       validatedData: messages.length === 0 ? validatedData : undefined,
-  //     };
-
-  //   } catch (parseError) {
-  //     return {
-  //       isValid: false,
-  //       messages: ['Invalid future event format'],
-  //     };
-  //   }
-  // }
-
-  private async validateLocationProximity(
-    originalCity: any,
-    newCity: any
-  ): Promise<{ valid: boolean; message?: string }> {
-    // Online events (city ID 1) 
-    if (newCity.id === 1 && originalCity.id !== 1) {
-      return { valid: true }; // Allow physical to online
-    }
-    
-    if (newCity.id !== 1 && originalCity.id === 1) {
-      return { valid: true }; // Allow online to physical
-    }
-
-    // Calculate distance between cities
-    const R = 6371; // Earth's radius in km
-    const radius = 50; // 50km radius allowed
-
-    const lat1 = parseFloat(originalCity.geo_lat);
-    const lon1 = parseFloat(originalCity.geo_long);
-    const lat2 = parseFloat(newCity.geo_lat);
-    const lon2 = parseFloat(newCity.geo_long);
-
-    if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) {
-      return { valid: false, message: 'latitude or longitude not valid' };
-    }
-
-    const maxLat = lat1 + (radius / R) * (180 / Math.PI);
-    const minLat = lat1 - (radius / R) * (180 / Math.PI);
-    const maxLon = lon1 + (radius / R) * (180 / Math.PI) / Math.cos(lat1 * Math.PI / 180);
-    const minLon = lon1 - (radius / R) * (180 / Math.PI) / Math.cos(lat1 * Math.PI / 180);
-
-    if (lat2 >= minLat && lat2 <= maxLat && lon2 >= minLon && lon2 <= maxLon) {
-      return { valid: true };
-    }
-
-    if (newCity.id === originalCity.id) {
-      return { valid: true }; // Same city is always allowed
-    }
-
-    return { 
-      valid: false, 
-      message: 'city is different from current edition city' 
-    };
-  }
-
-  private async upsertEventData(
-    tx: any,
-    eventId: number,
-    editionId: number,
-    title: string,
-    dataType: string,
-    value: string,
-    userId: number
-  ) {
-    const existing = await tx.event_data.findFirst({
-      where: {
-        event: eventId,
-        event_edition: editionId,
-        title: title
-      }
-    });
-
-    if (existing) {
-      await tx.event_data.update({
-        where: { id: existing.id },
-        data: {
-          value: value,
-          modifiedby: userId,
-          modified: new Date()
-        }
-      });
-    } else {
-      await tx.event_data.create({
-        data: {
-          event: eventId,
-          event_edition: editionId,
-          title: title,
-          data_type: dataType,
-          value: value,
-          createdby: userId,
-        }
-      });
-    }
-  }
-
-
-    // private async updateEvent(eventData: EventUpsertRequestDto, userId: number): Promise<EventUpsertResponseDto> {
-    //   try {
-    //     // Step 1: Perform all validations upfront
-    //     const validationResult = await this.validateEventUpdateData(eventData, userId);
-    //     if (!validationResult.isValid) {
-    //       return createErrorResponse(validationResult.messages);
-    //     }
-
-    //     // Extract validated data
-    //     const { existingEvent, company, location, eventTypeData, rehostAnalysis, categoryData, isCurrentEdition } = validationResult.validatedData!;
-
-    //     // Step 2: CORE TRANSACTION - Process update with validated data
-    //     const oldCompanyId = existingEvent.event_edition_event_event_editionToevent_edition?.company_id;
-    //     const newCompanyId = company?.id;
-        
-    //     const coreResult = await this.prisma.$transaction(async (tx) => {
-    //       let currentEdition = existingEvent.event_edition_event_event_editionToevent_edition;
-    //       let editionId = currentEdition?.id;
-    //       let isNewEdition = false;
-
-    //       console.log('Rehost Analysis:', rehostAnalysis);
-    //       console.log('Is Current Edition:', isCurrentEdition);
-
-    //       // Handle rehost scenario (create new edition)
-    //       if (rehostAnalysis.isRehost || rehostAnalysis.needsNewEdition) {
-    //         console.log('Creating new edition (rehost scenario)');
-
-    //         // Validate required dates for rehost
-    //         if (!eventData.startDate || !eventData.endDate) {
-    //           throw new Error('Start date and end date are required for rehost scenario');
-    //         }
-
-    //         // Calculate new edition number
-    //         let editionNumber = 1;
-    //         if (currentEdition && currentEdition.edition_number) {
-    //           editionNumber = currentEdition.edition_number + 1;
-    //         } else {
-    //           const maxEdition = await tx.event_edition.findFirst({
-    //             where: { event: existingEvent.id },
-    //             select: { edition_number: true },
-    //             orderBy: { edition_number: 'desc' }
-    //           });
-              
-    //           if (maxEdition && maxEdition.edition_number) {
-    //             editionNumber = maxEdition.edition_number + 1;
-    //           }
-    //         }
-            
-    //         // Create new edition with inheritance
-    //         const newEdition = await tx.event_edition.create({
-    //           data: {
-    //             event: existingEvent.id,
-                
-    //             // New dates (required for rehost) - now properly typed
-    //             start_date: new Date(eventData.startDate),
-    //             end_date: new Date(eventData.endDate),
-                
-    //             // Inherit or use new values
-    //             city: location?.city?.id || currentEdition.city,
-    //             venue: location?.venue?.id || (location?.removeVenue ? null : currentEdition.venue),
-    //             company_id: company?.id || currentEdition.company_id,
-    //             website: eventData.website || currentEdition.website,
-                
-    //             // Auto-calculated values
-    //             edition_number: editionNumber,
-    //             createdby: userId,
-    //             eep_process: eventData.eepProcess || 2,
-                
-    //             // Inherited social data
-    //             facebook_id: eventData.facebookId || currentEdition.facebook_id,
-    //             linkedin_id: eventData.linkedinId || currentEdition.linkedin_id,
-    //             twitter_id: eventData.twitterId || currentEdition.twitter_id,
-    //             twitter_hashtag: eventData.twitterHashTags || currentEdition.twitter_hashtag,
-    //             google_id: eventData.googleId || currentEdition.google_id,
-                
-    //             // Reset specific fields for new edition
-    //             visitors_total: null,
-    //             exhibitors_total: null,
-    //             area_total: null,
-    //           }
-    //         });
-
-    //         // Update event to point to new edition
-    //         await tx.event.update({
-    //           where: { id: existingEvent.id },
-    //           data: { 
-    //             event_edition: newEdition.id,
-    //             verified: null, // Reset verification for rehost
-    //             membership: 0,  // Reset membership
-    //           }
-    //         });
-
-    //         editionId = newEdition.id;
-    //         isNewEdition = true;
-    //         currentEdition = newEdition;
-            
-    //         console.log(`Created new edition ${editionId} for rehost`);
-    //       } else {
-    //         console.log('Updating existing edition');
-            
-    //         // Update existing edition (either current or past)
-    //         const editionUpdateData: any = {
-    //           modified: new Date(),
-    //           modifiedby: userId,
-    //         };
-
-    //         // Add proper null checks for optional dates
-    //         if (eventData.startDate) editionUpdateData.start_date = new Date(eventData.startDate);
-    //         if (eventData.endDate) editionUpdateData.end_date = new Date(eventData.endDate);
-    //         if (company) editionUpdateData.company_id = company.id;
-    //         if (location?.city) editionUpdateData.city = location.city.id;
-    //         if (location?.venue) editionUpdateData.venue = location.venue.id;
-    //         if (location?.removeVenue) editionUpdateData.venue = null;
-    //         if (eventData.facebookId) editionUpdateData.facebook_id = eventData.facebookId;
-    //         if (eventData.linkedinId) editionUpdateData.linkedin_id = eventData.linkedinId;
-    //         if (eventData.twitterId) editionUpdateData.twitter_id = eventData.twitterId;
-    //         if (eventData.twitterHashTags) editionUpdateData.twitter_hashtag = eventData.twitterHashTags;
-    //         if (eventData.googleId) editionUpdateData.google_id = eventData.googleId;
-    //         if (eventData.website) editionUpdateData.website = eventData.website;
-
-    //         await tx.event_edition.update({
-    //           where: { id: currentEdition.id },
-    //           data: editionUpdateData
-    //         });
-            
-    //         console.log(`Updated existing edition ${currentEdition.id}`);
-    //       }
-
-    //       // Update main event table ONLY if we're working with the current edition
-    //       if (isCurrentEdition || isNewEdition) {
-    //         console.log('Updating main event table (current edition changes)');
-            
-    //         const eventUpdateData: any = {
-    //           modified: new Date(),
-    //           modifiedby: userId,
-    //         };
-
-    //         // Basic event info updates
-    //         if (eventData.name) eventUpdateData.name = eventData.name;
-    //         if (eventData.abbrName) eventUpdateData.abbr_name = eventData.abbrName;
-    //         if (eventData.punchline) eventUpdateData.punchline = eventData.punchline;
-    //         if (eventData.website) eventUpdateData.website = eventData.website;
-    //         if (eventData.frequency) eventUpdateData.frequency = eventData.frequency;
-    //         if (eventData.brand) eventUpdateData.brand_id = eventData.brand;
-
-    //         // Dates - ONLY update if this is current edition or new edition
-    //         if (eventData.startDate) eventUpdateData.start_date = new Date(eventData.startDate);
-    //         if (eventData.endDate) eventUpdateData.end_date = new Date(eventData.endDate);
-
-    //         // Location - ONLY update if this is current edition or new edition  
-    //         if (location?.city) {
-    //           eventUpdateData.city = location.city.id;
-    //           eventUpdateData.country = location.country.id;
-    //         }
-
-    //         // Event type updates
-    //         if (eventTypeData) {
-    //           eventUpdateData.event_type = eventTypeData.eventType;
-    //           eventUpdateData.sub_event_type = eventTypeData.subEventType;
-    //           eventUpdateData.event_audience = eventTypeData.eventAudience?.toString();
-    //         }
-
-    //         await this.prisma.event.update({
-    //           where: { id: existingEvent.id },
-    //           data: eventUpdateData
-    //         });
-            
-    //         console.log('Main event table updated');
-    //       } else {
-    //         console.log('Skipping main event table update (past edition - changes isolated)');
-    //       }
-
-    //       // Handle sales data if provided
-    //       if (eventData.salesAction || eventData.salesActionBy || eventData.salesStatus || eventData.salesRemark) {
-    //         const salesResult = await this.processSalesData(eventData, editionId, userId, tx);
-    //         if (!salesResult.valid) {
-    //           throw new Error(`Sales data processing failed: ${salesResult.message}`);
-    //         }
-    //       }
-
-    //       if (eventData.contact) {
-    //         const contacts = JSON.parse(eventData.contact);
-    //         const validation = await this.commonService.validateContactEmails(contacts);
-            
-    //         if (!validation.valid) {
-    //           throw new Error(validation.message);
-    //         }
-
-    //         await this.commonService.addEventContacts(existingEvent.id, eventData.contact, userId);
-    //       }
-
-    //       await this.updateComplexEventData(existingEvent.id, editionId, eventData, userId, tx);
-
-    //       if (eventData.stats) {
-    //         const statsResult = await this.commonService.processEventStats(
-    //           existingEvent.id,
-    //           editionId,
-    //           eventData.stats,
-    //           userId,
-    //           tx
-    //         );
-    //         if (!statsResult.valid) {
-    //           this.logger.warn(`Stats processing failed: ${statsResult.message}`);
-    //         }
-    //       }
-
-    //       if (eventData.subVenue) {
-    //         let venueId: number | undefined;
-            
-    //         if (location?.venue?.id) {
-    //           venueId = location.venue.id;
-    //         } else if (typeof eventData.venue === 'number') {
-    //           venueId = eventData.venue;
-    //         } else if (currentEdition?.venue) {
-    //           venueId = currentEdition.venue;
-    //         }
-
-    //         if (venueId) {
-    //           const subVenueResult = await this.commonService.processSubVenues(
-    //             existingEvent.id,
-    //             editionId!,
-    //             eventData.subVenue,
-    //             venueId,
-    //             userId,
-    //             tx
-    //           );
-    //           if (!subVenueResult.valid) {
-    //             this.logger.warn(`SubVenue processing failed: ${subVenueResult.message}`);
-    //           }
-    //         }
-    //       }
-
-    //       // Process attachments
-    //       await this.processAttachments(eventData, existingEvent.id, editionId!, userId, tx);
-
-    //       // Handle event settings
-    //       if (eventData.eventSettings) {
-    //         try {
-    //           const settingsResult = await this.processEventSettings(
-    //             existingEvent.id,
-    //             eventData.eventSettings,
-    //             userId,
-    //             tx
-    //           );
-
-    //           if (!settingsResult.valid) {
-    //             this.logger.warn(`Event settings processing failed: ${settingsResult.message}`);
-    //           } else {
-    //             this.logger.log(`Event settings updated for event ${existingEvent.id}`);
-    //           }
-    //         } catch (error) {
-    //           this.logger.error('Event settings processing failed:', error);
-    //         }
-    //       }
-
-    //       if (eventTypeData?.eventTypeArray) {
-    //         await this.updateEventTypesStandalone(
-    //           existingEvent.id,
-    //           eventTypeData.eventTypeArray,
-    //           userId,
-    //           tx
-    //         );
-    //       }
-
-    //       let productCategoryIds: number[] = [];
-
-    //       // Process products first to get their categories
-    //       if (eventData.product) {
-    //         try {
-    //           const productResult = await this.commonService.processEventProducts(
-    //             existingEvent.id,
-    //             editionId!,
-    //             eventData.product,
-    //             userId,
-    //             tx
-    //           );
-    //           productCategoryIds = productResult.categoryIds;
-
-    //           if (productResult.softError) {
-    //             this.logger.warn(`Product processing warning: ${productResult.softError}`);
-    //           }
-
-    //           this.logger.log(`Processed products for event ${existingEvent.id}`);
-    //         } catch (error) {
-    //           this.logger.error('Product processing failed:', error);
-    //           throw new Error(`Product processing failed: ${error.message}`);
-    //         }
-    //       }
-
-    //       // Process categories (merge user categories with product categories)
-    //       if (eventData.category || productCategoryIds.length > 0) {
-    //         const userCategoryIds = categoryData?.categoryIds || [];
-    //         const allCategories = [...userCategoryIds, ...productCategoryIds];
-    //         const uniqueCategories = [...new Set(allCategories)];
-            
-    //         await this.commonService.processEventCategories(
-    //           existingEvent.id,
-    //           uniqueCategories,
-    //           userId,
-    //           undefined,
-    //           undefined,
-    //           tx
-    //         );
-
-    //         this.logger.log(`Processed categories for event ${existingEvent.id}`);
-    //       }
-
-    //       return { 
-    //         updatedEvent: existingEvent, 
-    //         editionId, 
-    //         isNewEdition,
-    //         oldEditionId: isNewEdition ? currentEdition?.id : undefined,
-    //         isCurrentEdition,
-    //         rehostScenario: rehostAnalysis.scenario
-    //       };
-    //     }, {
-    //       maxWait: 10000,
-    //       timeout: 20000,
-    //     });
-
-    //     console.log('Core transaction completed successfully');
-
-    //     // Handle Firebase session cloning if company changed
-    //     if (oldCompanyId !== newCompanyId) {
-    //       await this.handleFirebaseSessionCloning(
-    //         existingEvent.id,
-    //         oldCompanyId,
-    //         newCompanyId
-    //       );
-    //     }
-
-    //     // Copy event data for rehost
-    //     if (coreResult.isNewEdition && coreResult.oldEditionId) {
-    //       await this.copyEventDataToNewEdition(
-    //         existingEvent.id, 
-    //         coreResult.oldEditionId, 
-    //         coreResult.editionId, 
-    //         userId
-    //       );
-
-    //       await this.handleRehostElasticsearch(
-    //         existingEvent.id,
-    //         coreResult.oldEditionId,
-    //         coreResult.editionId
-    //       );
-    //       console.log('Event data copied to new edition');
-    //     }
-
-    //     // Continue with rest of the existing processing...
-    //     // [All your existing post-transaction operations remain the same]
-
-    //     return createSuccessResponse(
-    //       {
-    //         eventId: existingEvent.id,
-    //         editionId: coreResult.editionId,
-    //         // scenario: coreResult.rehostScenario,
-    //         // isNewEdition: coreResult.isNewEdition,
-    //         // isCurrentEdition: coreResult.isCurrentEdition
-    //       },
-    //       'updated'
-    //     );
-
-    //   } catch (error) {
-    //     console.error('Event update failed:', error);
-    //     return createErrorResponse([error.message || 'Event update failed']);
-    //   }
-    // }
-
-    // Optimized updateEvent method with performance improvements
 
     private async updateEvent(eventData: EventUpsertRequestDto, userId: number): Promise<EventUpsertResponseDto> {
       try {
@@ -3246,64 +1928,6 @@ private async processFutureAttachments(
       }
     }
   
-    private async processEventTypeUpdate(eventData: EventUpsertRequestDto, existingEvent: any): Promise<{
-      isValid: boolean;
-      message?: string;
-      eventType?: number;
-      subEventType?: number | null;
-      eventTypeArray?: number[];
-      eventAudience?: string;
-    }> {
-      // Check if user is trying to change from/to business floor (not allowed)
-      if (eventData.type && Array.isArray(eventData.type)) {
-        const isCurrentlyBusinessFloor = existingEvent.event_type === 10;
-        const hasBusinessFloor = eventData.type.includes('business-floor');
-        
-        if ((isCurrentlyBusinessFloor && !hasBusinessFloor) || 
-            (!isCurrentlyBusinessFloor && hasBusinessFloor)) {
-          return { isValid: false, message: 'you can not change the event type' };
-        }
-      }
-
-      // Process new event type using URL-based validation
-      let eventTypeValidation: any;
-      const typeInput = eventData.type;
-      
-      if (typeInput && Array.isArray(typeInput)) {
-        eventTypeValidation = await this.validationService.validateEventTypesWithUrl(typeInput);
-      }
-
-      if (!eventTypeValidation || !eventTypeValidation.isValid) {
-        return { isValid: false, message: eventTypeValidation?.message || 'Event type validation failed' };
-      }
-
-      return {
-        isValid: true,
-        eventType: eventTypeValidation.eventType,
-        subEventType: eventTypeValidation.subEventType,
-        eventTypeArray: eventTypeValidation.eventTypeArray,
-        eventAudience: eventTypeValidation.eventAudience
-      };
-    }
-  
-  private async updateEventCategoriesStandalone(eventId: number, categoryIds: number[], userId: number) {
-    await this.prisma.event_category.deleteMany({
-      where: { event: eventId }
-    });
-  
-    if (categoryIds.length > 0) {
-      const categoryData = categoryIds.map(categoryId => ({
-        category: categoryId,
-        event: eventId,
-        createdby: userId,
-      }));
-  
-      await this.prisma.event_category.createMany({
-        data: categoryData
-      });
-    }
-  }
-  
   private async updateEventTypesStandalone(eventId: number, eventTypeIds: number[], userId: number, prisma?: any) {
     const db = prisma || this.prisma;
     await db.event_type_event.updateMany({
@@ -3338,79 +1962,6 @@ private async processFutureAttachments(
             event_id: eventId,
             created_by: userId,
             published: 1,
-          }
-        });
-      }
-    }
-  }
-  
-  private async updateComplexEventData(eventId: number, editionId: number, eventData: EventUpsertRequestDto, userId: number, prisma?: any) {
-    const db = prisma || this.prisma;
-    const updates: Array<{
-      title: string;
-      data_type: string;
-      value: string;
-    }> = [];
-  
-    if (eventData.timing) {
-      updates.push({
-        title: 'timing',
-        data_type: 'JSON',
-        value: typeof eventData.timing === 'string' ? eventData.timing : JSON.stringify(eventData.timing),
-      });
-    }
-  
-    if (eventData.highlights) {
-      updates.push({
-        title: 'event_highlights',
-        data_type: 'JSON',
-        value: eventData.highlights,
-      });
-    }
-
-     if (eventData.description) {
-      updates.push({
-        title: 'desc',
-        data_type: 'TEXT',
-        value: eventData.description,
-      });
-    }
-
-    if (eventData.shortDesc) {
-      updates.push({
-        title: 'short_desc',
-        data_type: 'TEXT',
-        value: eventData.shortDesc,
-      });
-    }
-  
-    for (const update of updates) {
-      const existing = await db.event_data.findFirst({
-        where: {
-          event: eventId,
-          event_edition: editionId,
-          title: update.title
-        }
-      });
-  
-      if (existing) {
-        await db.event_data.update({
-          where: { id: existing.id },
-          data: {
-            value: update.value,
-            modifiedby: userId,
-            modified: new Date(),
-          }
-        });
-      } else {
-        await db.event_data.create({
-          data: {
-            event: eventId,
-            event_edition: editionId,
-            data_type: update.data_type,
-            title: update.title,
-            value: update.value,
-            createdby: userId,
           }
         });
       }
@@ -3712,22 +2263,6 @@ private async processFutureAttachments(
         
       } catch (error) {
         this.logger.error(`Failed to ${isUpdate ? 'update' : 'index'} event ${eventId} in Elasticsearch:`, error.message);
-      }
-    }
-  
-    private async handleRehostElasticsearch(
-      eventId: number, 
-      oldEditionId: number, 
-      newEditionId: number
-    ): Promise<void> {
-      try {
-        this.logger.log(`Handling rehost Elasticsearch update for event ${eventId}: ${oldEditionId} -> ${newEditionId}`);
-        
-        // Re-index the event with new edition data
-        await this.indexToElasticsearch(eventId, true);
-        
-      } catch (error) {
-        this.logger.error(`Failed to handle rehost Elasticsearch update for event ${eventId}:`, error.message);
       }
     }
   
@@ -4198,112 +2733,112 @@ private async processFutureAttachments(
   }
 
   private async processSubVenues(
-  eventId: number,
-  editionId: number,
-  eventData: EventUpsertRequestDto,
-  userId: number,
-  tx: any
-): Promise<void> {
-  try {
-    // Type safety check
-    if (!eventData.subVenue || typeof eventData.subVenue !== 'string') {
-      this.logger.warn(`SubVenue processing skipped for event ${eventId}: invalid subVenue data`);
-      return;
-    }
-
-    this.logger.log(`Starting subVenue processing for event ${eventId}, edition ${editionId}`);
-    this.logger.log(`SubVenue data: ${eventData.subVenue}`);
-
-    // Get venue ID from multiple sources
-    let venueId: number | undefined;
-    
-    // 1. Check if venue was updated in this request
-    if (eventData.venue) {
-      this.logger.log(`Venue found in request data: ${eventData.venue}`);
-      if (typeof eventData.venue === 'number') {
-        venueId = eventData.venue;
-      } else if (typeof eventData.venue === 'string' && this.isNumeric(eventData.venue)) {
-        venueId = parseInt(eventData.venue);
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number,
+    tx: any
+  ): Promise<void> {
+    try {
+      // Type safety check
+      if (!eventData.subVenue || typeof eventData.subVenue !== 'string') {
+        this.logger.warn(`SubVenue processing skipped for event ${eventId}: invalid subVenue data`);
+        return;
       }
-      this.logger.log(`Parsed venue ID from request: ${venueId}`);
-    } else {
-      this.logger.log(`No venue in request data, checking database...`);
-    }
-    
-    // 2. If no venue in request, get from current edition
-    if (!venueId) {
-      this.logger.log(`Checking current edition ${editionId} for venue...`);
-      const currentEdition = await tx.event_edition.findUnique({
-        where: { id: editionId },
-        select: { venue: true }
-      });
-      venueId = currentEdition?.venue || undefined;
-      this.logger.log(`Current edition venue: ${venueId}`);
-    }
-    
-    // 3. If still no venue, get from main event's current edition
-    if (!venueId) {
-      this.logger.log(`Checking main event ${eventId} for venue...`);
-      const event = await tx.event.findUnique({
-        where: { id: eventId },
-        include: {
-          event_edition_event_event_editionToevent_edition: {
-            select: { venue: true }
-          }
-        }
-      });
-      venueId = event?.event_edition_event_event_editionToevent_edition?.venue || undefined;
-      this.logger.log(`Main event current edition venue: ${venueId}`);
-    }
 
-    if (!venueId) {
-      this.logger.warn(`SubVenue processing skipped for event ${eventId}: no venue found after checking all sources`);
+      this.logger.log(`Starting subVenue processing for event ${eventId}, edition ${editionId}`);
+      this.logger.log(`SubVenue data: ${eventData.subVenue}`);
+
+      // Get venue ID from multiple sources
+      let venueId: number | undefined;
       
-      // Let's also check what data we actually have
-      const debugEvent = await tx.event.findUnique({
-        where: { id: eventId },
-        include: {
-          event_edition_event_event_editionToevent_edition: {
-            select: { 
-              id: true,
-              venue: true,
-              city: true,
-              company_id: true 
+      // 1. Check if venue was updated in this request
+      if (eventData.venue) {
+        this.logger.log(`Venue found in request data: ${eventData.venue}`);
+        if (typeof eventData.venue === 'number') {
+          venueId = eventData.venue;
+        } else if (typeof eventData.venue === 'string' && this.isNumeric(eventData.venue)) {
+          venueId = parseInt(eventData.venue);
+        }
+        this.logger.log(`Parsed venue ID from request: ${venueId}`);
+      } else {
+        this.logger.log(`No venue in request data, checking database...`);
+      }
+      
+      // 2. If no venue in request, get from current edition
+      if (!venueId) {
+        this.logger.log(`Checking current edition ${editionId} for venue...`);
+        const currentEdition = await tx.event_edition.findUnique({
+          where: { id: editionId },
+          select: { venue: true }
+        });
+        venueId = currentEdition?.venue || undefined;
+        this.logger.log(`Current edition venue: ${venueId}`);
+      }
+      
+      // 3. If still no venue, get from main event's current edition
+      if (!venueId) {
+        this.logger.log(`Checking main event ${eventId} for venue...`);
+        const event = await tx.event.findUnique({
+          where: { id: eventId },
+          include: {
+            event_edition_event_event_editionToevent_edition: {
+              select: { venue: true }
             }
           }
-        }
-      });
-      
-      this.logger.log(`Debug - Event data:`, {
-        eventId: debugEvent?.id,
-        currentEdition: debugEvent?.event_edition_event_event_editionToevent_edition
-      });
-      
-      return;
+        });
+        venueId = event?.event_edition_event_event_editionToevent_edition?.venue || undefined;
+        this.logger.log(`Main event current edition venue: ${venueId}`);
+      }
+
+      if (!venueId) {
+        this.logger.warn(`SubVenue processing skipped for event ${eventId}: no venue found after checking all sources`);
+        
+        // Let's also check what data we actually have
+        const debugEvent = await tx.event.findUnique({
+          where: { id: eventId },
+          include: {
+            event_edition_event_event_editionToevent_edition: {
+              select: { 
+                id: true,
+                venue: true,
+                city: true,
+                company_id: true 
+              }
+            }
+          }
+        });
+        
+        this.logger.log(`Debug - Event data:`, {
+          eventId: debugEvent?.id,
+          currentEdition: debugEvent?.event_edition_event_event_editionToevent_edition
+        });
+        
+        return;
+      }
+
+      this.logger.log(`Using venue ID: ${venueId} for subVenue processing`);
+
+      // Process sub-venues using CommonService
+      const result = await this.commonService.processSubVenues(
+        eventId,
+        editionId,
+        eventData.subVenue,
+        venueId,
+        userId,
+        tx
+      );
+
+      if (result.valid) {
+        this.logger.log(`Successfully processed ${result.subVenueIds?.length || 0} sub-venues for event ${eventId}`);
+      } else {
+        this.logger.warn(`SubVenue processing failed for event ${eventId}: ${result.message}`);
+      }
+    } catch (error) {
+      this.logger.error(`SubVenue processing error for event ${eventId}:`, error);
+      // Don't throw - this is not critical enough to fail the entire update
     }
-
-    this.logger.log(`Using venue ID: ${venueId} for subVenue processing`);
-
-    // Process sub-venues using CommonService
-    const result = await this.commonService.processSubVenues(
-      eventId,
-      editionId,
-      eventData.subVenue,
-      venueId,
-      userId,
-      tx
-    );
-
-    if (result.valid) {
-      this.logger.log(`Successfully processed ${result.subVenueIds?.length || 0} sub-venues for event ${eventId}`);
-    } else {
-      this.logger.warn(`SubVenue processing failed for event ${eventId}: ${result.message}`);
-    }
-  } catch (error) {
-    this.logger.error(`SubVenue processing error for event ${eventId}:`, error);
-    // Don't throw - this is not critical enough to fail the entire update
   }
-}
 
   // Add this helper method if it doesn't exist:
   private isNumeric(value: any): boolean {
@@ -4820,24 +3355,6 @@ private async processFutureAttachments(
     }
   }
 
-  // private async createEventSettings(eventId: number, dto: CreateEventRequestDto, prisma: any) {
-  //   if (dto.fromDashboard === 1 && 
-  //       (dto.autoApproval !== undefined || dto.regStartDate || dto.regEndDate || dto.capacity)) {
-      
-  //     await prisma.event_settings.create({
-  //       data: {
-  //         event_id: eventId,
-  //         user_id: dto.changesMadeBy,
-  //         auto_approval: dto.autoApproval ?? 0,
-  //         reg_start_date: dto.regStartDate ? new Date(dto.regStartDate) : null,
-  //         reg_end_date: dto.regEndDate ? new Date(dto.regEndDate) : null,
-  //         capacity: dto.capacity ?? null,
-  //         created: new Date(),
-  //       }
-  //     });
-  //   }
-  // }
-
   private async createDefaultQuestionnaire(eventId: number, prisma: any) {
     try {
       const questionnaire = await prisma.questionnaire.create({
@@ -4864,48 +3381,6 @@ private async processFutureAttachments(
       this.logger.error('Questionnaire creation error:', error);
     }
   }
-
-  // private async createEventTypeAssociations(
-  //   eventId: number,
-  //   type: string[], // Only accept arrays now
-  //   userId: number,
-  //   prisma: any
-  // ) {
-  //   try {
-  //     const eventTypes = this.mapEventTypeToArray(type);
-
-  //     for (const eventTypeId of eventTypes) {
-  //       const eventType = await prisma.event_type.findUnique({
-  //         where: { id: eventTypeId },
-  //       });
-
-  //       if (eventType) {
-  //         await prisma.event_type_event.upsert({
-  //           where: {
-  //             eventtype_id_event_id: {  
-  //               eventtype_id: eventTypeId,
-  //               event_id: eventId,
-  //             },
-  //           },
-  //           update: {
-  //             modified_by: userId,
-  //             modified: new Date(),
-  //           },
-  //           create: {
-  //             eventtype_id: eventTypeId,
-  //             event_id: eventId,
-  //             created_by: userId,
-  //             created: new Date(),
-  //             modified: new Date(),
-  //             published: 1,
-  //           },
-  //         });
-  //       }
-  //     }
-  //   } catch (error) {
-  //     this.logger.error('Event type association error:', error);
-  //   }
-  // }
 
   private async createEventTypeAssociations(
     eventId: number, 
