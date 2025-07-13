@@ -1067,7 +1067,7 @@ export class EventService {
             rehostScenario: rehostAnalysis.scenario
           };
         }, {
-          maxWait: 10000,   // Reduced from 10000
+          maxWait: 15000,   // Reduced from 10000
           timeout: 20000,  // Reduced from 20000
         });
 
