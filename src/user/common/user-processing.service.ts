@@ -1080,39 +1080,88 @@ export class UserProcessingService {
     }
   }
 
+  // private async enhanceLocationData(result: any, user: any): Promise<void> {
+  //   try {
+  //     // Initialize defaults
+  //     result.cityName = '';
+  //     result.stateName = '';
+  //     result.countryName = '';
+  //     result.placeId = ''; // Fixed camelCase
+  //     result.cityUrl = '';
+  //     result.countryUrl = '';
+
+  //     if (user.city && typeof user.city === 'number') {
+  //       // Get city with country relation
+  //       const city = user.city_user_cityTocity || await this.prisma.city.findUnique({
+  //         where: { id: user.city },
+  //         // include: {
+  //         //   country_city_countryTocountry: true,
+  //         // },
+  //       });
+
+  //       if (city) {
+  //         result.cityName = city.name || '';
+  //         result.stateName = city.state || '';
+  //         result.placeId = city.place_id || ''; // Fixed camelCase
+  //         result.cityUrl = city.url || '';
+          
+  //         // Get country data
+  //         if (city.country_city_countryTocountry) {
+  //           result.countryName = city.country_city_countryTocountry.name || '';
+  //           result.countryUrl = city.country_city_countryTocountry.url || '';
+  //         }
+  //       }
+  //     } else if (user.country && user.country !== '') {
+  //       // Only country, no city
+  //       const country = user.country_user_countryTocountry || await this.prisma.country.findUnique({
+  //         where: { id: user.country },
+  //       });
+
+  //       if (country) {
+  //         result.countryName = country.name || '';
+  //         result.countryUrl = country.url || '';
+  //       }
+  //     }
+
+  //   } catch (error) {
+  //     this.logger.error(`Enhance location data failed: ${error.message}`);
+  //   }
+  // }
+
   private async enhanceLocationData(result: any, user: any): Promise<void> {
     try {
-      // Initialize defaults
       result.cityName = '';
       result.stateName = '';
       result.countryName = '';
-      result.placeId = ''; // Fixed camelCase
+      result.placeId = '';
       result.cityUrl = '';
       result.countryUrl = '';
 
       if (user.city && typeof user.city === 'number') {
-        // Get city with country relation
         const city = user.city_user_cityTocity || await this.prisma.city.findUnique({
           where: { id: user.city },
-          // include: {
-          //   country_city_countryTocountry: true,
-          // },
         });
 
         if (city) {
           result.cityName = city.name || '';
           result.stateName = city.state || '';
-          result.placeId = city.place_id || ''; // Fixed camelCase
+          result.placeId = city.place_id || '';
           result.cityUrl = city.url || '';
-          
-          // Get country data
-          if (city.country_city_countryTocountry) {
-            result.countryName = city.country_city_countryTocountry.name || '';
-            result.countryUrl = city.country_city_countryTocountry.url || '';
+
+          let country: any = null;
+          if (city.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: city.country },
+            });
+          }
+
+          if (country) {
+            result.countryName = country.name || '';
+            result.countryUrl = country.url || '';
           }
         }
+
       } else if (user.country && user.country !== '') {
-        // Only country, no city
         const country = user.country_user_countryTocountry || await this.prisma.country.findUnique({
           where: { id: user.country },
         });
@@ -1127,6 +1176,7 @@ export class UserProcessingService {
       this.logger.error(`Enhance location data failed: ${error.message}`);
     }
   }
+
 
   private async enhancePhoneData(result: any, user: any): Promise<void> {
     try {

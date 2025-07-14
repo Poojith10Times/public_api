@@ -103,6 +103,64 @@ export class UserValidationService {
     }
   }
 
+  // async validateLocation(data: UserUpsertRequestDto): Promise<{
+  //   isValid: boolean;
+  //   message?: string;
+  //   locationData?: LocationData;
+  // }> {
+  //   try {
+  //     const locationData: LocationData = {};
+
+  //     // Handle place_id (Google Places integration)
+  //     if (data.placeId) {
+  //       const placeResult = await this.resolvePlaceId(data.placeId);
+  //       if (placeResult.isValid) {
+  //         locationData.cityId = placeResult.data.cityId;
+  //         locationData.countryId = placeResult.data.countryCode;
+  //       } else {
+  //         return {
+  //           isValid: false,
+  //           message: placeResult.message,
+  //         };
+  //       }
+  //     }
+
+  //     // Handle cityCode
+  //     if (data.city && typeof data.city === 'number') {
+  //       const city = await this.prisma.city.findUnique({
+  //         where: { id: data.city },
+  //         // include: {
+  //         //   country_city_countryTocountry: true,
+  //         // },
+  //       });
+
+  //       if (city) {
+  //         locationData.cityId = city.id;
+  //         locationData.countryId = city.country || undefined;
+  //         locationData.city = city;
+  //         locationData.country = city.country;
+  //       } else {
+  //         return {
+  //           isValid: false,
+  //           message: 'Invalid city code',
+  //         };
+  //       }
+  //     }
+
+  //     return {
+  //       isValid: true,
+  //       locationData,
+  //     };
+
+  //   } catch (error) {
+  //     this.logger.error(`Location validation error: ${error.message}`);
+  //     return {
+  //       isValid: false,
+  //       message: 'Location validation failed',
+  //     };
+  //   }
+  // }
+
   async validateLocation(data: UserUpsertRequestDto): Promise<{
     isValid: boolean;
     message?: string;
@@ -111,7 +169,6 @@ export class UserValidationService {
     try {
       const locationData: LocationData = {};
 
-      // Handle place_id (Google Places integration)
       if (data.placeId) {
         const placeResult = await this.resolvePlaceId(data.placeId);
         if (placeResult.isValid) {
@@ -125,20 +182,27 @@ export class UserValidationService {
         }
       }
 
-      // Handle cityCode
       if (data.city && typeof data.city === 'number') {
         const city = await this.prisma.city.findUnique({
           where: { id: data.city },
-          // include: {
-          //   country_city_countryTocountry: true,
-          // },
         });
 
         if (city) {
           locationData.cityId = city.id;
-          locationData.countryId = city.country || undefined;
           locationData.city = city;
-          locationData.country = city.country;
+          locationData.countryId = city.country || undefined;
+
+          let country: any = null;
+          if (city.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: city.country },
+            });
+          }
+
+          if (country) {
+            locationData.country = country;
+          }
+
         } else {
           return {
             isValid: false,
@@ -160,6 +224,7 @@ export class UserValidationService {
       };
     }
   }
+
 
   private async resolvePlaceId(placeId: string): Promise<ValidationResult> {
     // TODO: Implement Google Places API integration

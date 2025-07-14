@@ -55,187 +55,6 @@ export class UserCommonService {
     private readonly reviewService: UnifiedReviewService,
   ) {}
 
-  // async syncEventVisitorData(
-  //   userData: EventVisitorSyncData, 
-  //   requestData: UserUpsertRequestDto
-  // ): Promise<void> {
-  //   try {
-  //     this.logger.log(`=== SYNC DEBUG START ===`);
-  //     this.logger.log(`User ID: ${userData.id}`);
-  //     this.logger.log(`User City: ${userData.city}`);
-  //     this.logger.log(`User Company: ${userData.userCompany}`);
-  //     this.logger.log(`User Designation: ${userData.designation}`);
-  //     let city: any = null;
-  //     let country: { id?: number } | null = null;
-
-  //     if (userData.city && typeof userData.city === 'number') {
-  //       city = await this.prisma.city.findUnique({
-  //         where: { id: userData.city },
-  //         include: {
-  //           area_values: true,
-  //         },
-  //       });
-
-  //       if (city) {
-  //         country = city.country;
-  //       }
-  //     }
-
-  //     // Find all incomplete event visitor records for this user
-  //     // const eventVisitors = await this.prisma.event_visitor.findMany({
-  //     //   where: {
-  //     //     user: userData.id,
-  //     //     completed_on: null,
-  //     //   },
-  //     //   include: {
-  //     //     event_edition: {
-  //     //       include: {
-  //     //         event_event_event_editionToevent_edition: true,
-  //     //       },
-  //     //     },
-  //     //   },
-  //     // });
-
-  //     // this.logger.log(`Found ${eventVisitors.length} incomplete event visitor records`);
-
-  //     const eventVisitors = await this.prisma.$queryRaw`
-  //       SELECT ev.*, 
-  //             ee.event as event_id
-  //       FROM event_visitor ev
-  //       LEFT JOIN event_edition ee ON ev.edition = ee.id
-  //       WHERE ev.user = ${userData.id} 
-  //         AND ev.completed_on IS NULL
-  //         AND (ev.created IS NULL OR ev.created != '0000-00-00 00:00:00')
-  //     ` as any[];
-
-  //     this.logger.log(`Found ${eventVisitors.length} incomplete event visitor records`);
-
-  //     for (const visitor of eventVisitors) {
-  //       let shouldFlush = false;
-  //       let shouldComplete = false;
-  //       let searchText = visitor.search || '';
-
-  //       // Update city and country information
-  //       if (city && !visitor.visitor_city) {
-  //         await this.prisma.event_visitor.update({
-  //           where: { id: visitor.id },
-  //           data: {
-  //             visitor_city: city.id,
-  //             visitor_country: country?.id ? String(country.id) : visitor.visitor_country,
-  //           },
-  //         });
-
-  //         searchText += ` ${userData.cityName} ${userData.countryName}`;
-  //         shouldFlush = true;
-  //       }
-
-  //       // Update company information
-  //       if (userData.userCompany && 
-  //           !visitor.visitor_company && 
-  //           this.isValidCompanyData(userData.userCompany)) {
-          
-  //         await this.prisma.event_visitor.update({
-  //           where: { id: visitor.id },
-  //           data: {
-  //             visitor_company: userData.userCompany,
-  //           },
-  //         });
-
-  //         searchText += ` ${userData.userCompany}`;
-  //         shouldFlush = true;
-  //       }
-
-  //       // Update designation information
-  //       if (userData.designation && 
-  //           !visitor.visitor_designation && 
-  //           this.isValidDesignationData(userData.designation)) {
-          
-  //         const updateData: any = {
-  //           visitor_designation: userData.designation,
-  //         };
-
-  //         if (userData.designationId) {
-  //           updateData.designation_id = userData.designationId;
-  //         }
-
-  //         await this.prisma.event_visitor.update({
-  //           where: { id: visitor.id },
-  //           data: updateData,
-  //         });
-
-  //         searchText += ` ${userData.designation}`;
-  //         shouldFlush = true;
-  //       }
-
-  //       // Update phone information (with duplicate check)
-  //       if (userData.phone && !visitor.visitor_phone) {
-  //         const phoneUpdateAllowed = await this.checkPhoneUpdateAllowed(
-  //           visitor.edition, 
-  //           userData.phone, 
-  //           userData.id
-  //         );
-
-  //         if (phoneUpdateAllowed) {
-  //           await this.prisma.event_visitor.update({
-  //             where: { id: visitor.id },
-  //             data: {
-  //               visitor_phone: userData.phone,
-  //             },
-  //           });
-
-  //           shouldFlush = true;
-  //         }
-  //       }
-
-  //       // Check if visitor record is now complete
-  //       const updatedVisitor = await this.prisma.event_visitor.findUnique({
-  //         where: { id: visitor.id },
-  //       });
-
-  //       if (updatedVisitor && this.isVisitorComplete(updatedVisitor, userData.name)) {
-  //         shouldComplete = true;
-  //       }
-
-  //       // Update search text and completion status
-  //       if (shouldFlush || shouldComplete) {
-  //         const updateData: any = {};
-
-  //         if (shouldFlush) {
-  //           updateData.search = searchText.trim();
-  //         }
-
-  //         if (shouldComplete && !updatedVisitor?.completed_on) {
-  //           updateData.completed_on = new Date();
-  //         }
-
-  //         if (Object.keys(updateData).length > 0) {
-  //           await this.prisma.event_visitor.update({
-  //             where: { id: visitor.id },
-  //             data: updateData,
-  //           });
-  //         }
-  //       }
-
-  //       // Generate badge if visitor is completed and doesn't have one
-  //       if (shouldComplete && 
-  //           !updatedVisitor?.badge && 
-  //           !this.shouldSkipBadgeGeneration(requestData)) {
-  //         await this.triggerBadgeGeneration(visitor, requestData);
-  //       }
-
-  //       this.logger.debug(`Event visitor ${visitor.id} synced for user ${userData.id}`);
-  //     }
-
-  //     this.logger.log(`Synced ${eventVisitors.length} event visitor records for user ${userData.id}`);
-
-  //   } catch (error) {
-  //     this.logger.error(`Event visitor sync failed for user ${userData.id}: ${error.message}`);
-  //     throw error;
-  //   }
-  // }
-
-  // Replace the raw query with proper Prisma query handling invalid dates
-
   async syncEventVisitorData(
     userData: EventVisitorSyncData, 
     requestData: UserUpsertRequestDto
@@ -249,6 +68,19 @@ export class UserCommonService {
       let city: any = null;
       let country: { id?: number } | null = null;
 
+      // if (userData.city && typeof userData.city === 'number') {
+      //   city = await this.prisma.city.findUnique({
+      //     where: { id: userData.city },
+      //     include: {
+      //       area_values: true,
+      //     },
+      //   });
+
+      //   if (city) {
+      //     country = city.country;
+      //   }
+      // }
+
       if (userData.city && typeof userData.city === 'number') {
         city = await this.prisma.city.findUnique({
           where: { id: userData.city },
@@ -258,9 +90,16 @@ export class UserCommonService {
         });
 
         if (city) {
-          country = city.country;
+          let fetchedCountry: any = null;
+          if (city.country) {
+            fetchedCountry = await this.prisma.country.findUnique({
+              where: { id: city.country },
+            });
+          }
+          country = fetchedCountry;
         }
       }
+
 
       // Handle invalid dates in event_visitor table with proper Prisma query
       let eventVisitors: any[] = [];
