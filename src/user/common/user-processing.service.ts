@@ -829,7 +829,11 @@ export class UserProcessingService {
     //     }
     // }
 
-    if (userData.profilePicture && userData.profilePicture.trim() !== '') {
+    if (!isCreateMode && userData.profilePicture === 'remove') {
+      updateData.profile_picture = null;
+    }
+
+    if (userData.profilePicture && userData.profilePicture.trim() !== '' && userData.profilePicture!=='remove') {
       if (isCreateMode) {
         // Create mode: Always set if provided
         updateData.profile_picture = userData.profilePicture;
@@ -1171,7 +1175,7 @@ export class UserProcessingService {
 
       // Priority 1: Direct profile picture
       if (user.profile_picture && user.profile_picture.trim() !== '' && 
-          user.profile_picture !== 'NULL' && !user.profile_picture.includes('x-empty')) {
+          user.profile_picture !== 'NULL' && user.profile_picture !== null && !user.profile_picture.includes('x-empty')) {
         image = user.profile_picture;
       }
 

@@ -76,8 +76,11 @@ export const UserUpsertRequestSchema = z.object({
   // savelinkedinMetadata: z.union([z.string(), z.number(), z.boolean()]).optional(),
   
   // Profile settings
-  profilePicture: z.string().optional(), // check 
-  pictureFromSocial: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  profilePicture: z.union([
+    z.string().min(1, 'Profile picture URL cannot be empty'),
+    z.literal('remove'),
+  ]).optional(), 
+  pictureFromSocial: z.union([z.string(), z.number(), z.boolean()]).optional(), // not required 
   showMe: z.union([z.string(), z.number(), z.boolean()]).optional(),
   introduceMe: z.union([z.string(), z.number(), z.boolean()]).optional(), // also autointroduce
   // autointroduce: z.union([z.string(), z.number(), z.boolean()]).optional(),

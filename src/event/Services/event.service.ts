@@ -1054,7 +1054,7 @@ export class EventService {
           }
 
 
-          // Execute all bulk operations in parallel where possible
+          // Execute all bulk operations in parallel 
           if (bulkOperations.length > 0) {
             await Promise.all(bulkOperations);
           }
@@ -1067,8 +1067,8 @@ export class EventService {
             rehostScenario: rehostAnalysis.scenario
           };
         }, {
-          maxWait: 15000,   // Reduced from 10000
-          timeout: 20000,  // Reduced from 20000
+          maxWait: 15000,   
+          timeout: 20000,  
         });
 
         console.log('Core transaction completed successfully');
