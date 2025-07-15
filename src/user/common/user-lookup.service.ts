@@ -171,20 +171,6 @@ export class UserLookupService {
       { field: 'wikipediaId', column: 'wikipedia', source: 'wikipedia' as const },
     ];
 
-    // Check if checkDuplicateBy is specified 
-    // if (data.checkDuplicateBy) {
-    //   const platform = socialPlatforms.find(p => p.field === data.checkDuplicateBy);
-    //   if (platform && data[platform.field as keyof UserUpsertRequestDto]) {
-    //     const user = await this.findUserBySocialId(
-    //       platform.column, 
-    //       data[platform.field as keyof UserUpsertRequestDto] as string
-    //     );
-    //     if (user) {
-    //       return { user, source: platform.source };
-    //     }
-    //   }
-    // }
-
     // Try each platform in order
     for (const platform of socialPlatforms) {
       const socialId = data[platform.field as keyof UserUpsertRequestDto] as string;

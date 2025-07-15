@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { UserUpsertRequestDto } from '../dto/user-upsert-request.dto';
 import { PhoneValidationService } from './phone-validation.service';
 import { UserValidationService } from './user-validation.service';
+import { UserCommonService } from './userCommon.service';
 
 export interface ProcessingOptions {
   isFullUpdate?: boolean;
@@ -13,6 +14,8 @@ export interface ProcessingOptions {
   locationData?: any;
   companyData?: any;
   designationData?: any;
+  phoneVerificationResult?: boolean;
+
 }
 
 @Injectable()
@@ -22,7 +25,8 @@ export class UserProcessingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly phoneValidationService: PhoneValidationService,
-    private readonly userValidationService: UserValidationService
+    private readonly userValidationService: UserValidationService,
+    private readonly userCommonService: UserCommonService
   ) {}
 
 
@@ -47,12 +51,17 @@ export class UserProcessingService {
         modifiedby: userData.changesMadeBy,
       };
 
+      let emailVerificationStatus = false;
+      if (userData.email && existingUser?.id) {
+        emailVerificationStatus = await this.userCommonService.checkEmailVerificationFromOtp(existingUser.id, userData.email);
+      }
+
       this.processBasicFields(userData, existingUser, updateData, isFullUpdate);
       this.processLocationFields(userData, existingUser, updateData, options.locationData, isFullUpdate);
       this.processCompanyFields(userData, existingUser, updateData, options.companyData, isFullUpdate);
       this.processDesignationFields(userData, existingUser, updateData, options.designationData, isFullUpdate);
       this.processSocialFields(userData, existingUser, updateData, isFullUpdate);
-      this.processVerificationFields(userData, existingUser, updateData, isFullUpdate);
+      this.processVerificationFields(userData, existingUser, updateData, isFullUpdate, emailVerificationStatus, options.phoneVerificationResult || false);
       this.processProfileFields(userData, existingUser, updateData, isFullUpdate);
 
       const finalUser = { ...existingUser, ...updateData };
@@ -86,10 +95,20 @@ export class UserProcessingService {
       }
 
       // Handle verification updates
+      // if (!existingUser || existingUser.verified !== true) {
+      //   updateData.verified = true;
+      //   if ((existingUser?.email || userData.email) && userData.action !== 'redeemCredits') {
+      //     updateData.email_verified = new Date();
+      //   }
+      //   userPersistFlag = true;
+      // }
+
       if (!existingUser || existingUser.verified !== true) {
         updateData.verified = true;
         if ((existingUser?.email || userData.email) && userData.action !== 'redeemCredits') {
-          updateData.email_verified = new Date();
+          if (emailVerificationStatus && !existingUser?.email_verified) {
+            updateData.email_verified = new Date(); 
+          }
         }
         userPersistFlag = true;
       }
@@ -177,12 +196,14 @@ export class UserProcessingService {
         language: userData.lang || 'en',
       };
 
+      const emailVerificationStatus = false;
+
       this.processBasicFields(userData, null, createData, true);
       this.processLocationFields(userData, null, createData, options.locationData, true);
       this.processCompanyFields(userData, null, createData, options.companyData, true);
       this.processDesignationFields(userData, null, createData, options.designationData, true);
       this.processSocialFields(userData, null, createData, true);
-      this.processVerificationFields(userData, null, createData, true);
+      this.processVerificationFields(userData, null, createData, true, emailVerificationStatus, options.phoneVerificationResult || false );
       this.processProfileFields(userData, null, createData, true);
 
       const isProfileComplete = !!(
@@ -753,16 +774,24 @@ export class UserProcessingService {
     userData: UserUpsertRequestDto,
     existingUser: any | null,
     updateData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    emailVerificationStatus: boolean = false,
+    phoneVerificationResult: boolean = false 
     ): void {
     const isCreateMode = existingUser === null;
 
     // Email verification
-    if (
-        (updateData.email || existingUser?.email) && 
-        userData.action !== 'redeemCredits') {
+    // if (
+    //     (updateData.email || existingUser?.email) && 
+    //     userData.action !== 'redeemCredits') {
       
-      if (isCreateMode || !existingUser.email_verified) {
+    //   if (isCreateMode || !existingUser.email_verified) {
+    //     updateData.email_verified = new Date();
+    //   }
+    // }
+
+    if ((updateData.email || existingUser?.email) && userData.action !== 'redeemCredits') {
+      if (emailVerificationStatus && (isCreateMode || !existingUser.email_verified)) {
         updateData.email_verified = new Date();
       }
     }
@@ -782,14 +811,21 @@ export class UserProcessingService {
     }
     
     // Apply phone verification if conditions are met and phone exists
-    if (shouldVerifyPhone && 
+    // if (shouldVerifyPhone && 
+    //     (updateData.phone || userData.phone) && 
+    //     (isCreateMode || !existingUser?.phone_verified)) {
+    //   updateData.phone_verified = new Date();
+    //   updateData.verified = true;
+    // }
+
+    // Replace the existing phone verification section with:
+    if (phoneVerificationResult && 
         (updateData.phone || userData.phone) && 
         (isCreateMode || !existingUser?.phone_verified)) {
       updateData.phone_verified = new Date();
       updateData.verified = true;
     }
 
-    // **FIXED: Profile verification**
     // Profile should be verified when name is provided
     if ((updateData.name || userData.name) && userData.name?.trim() !== '') {
       updateData.profile_verified = new Date();

@@ -49,6 +49,9 @@ export const UserUpsertRequestSchema = z.object({
   userId: z.number().optional(),
   email: z.string().email('Invalid email format').optional(),
   phone: phoneValidation,
+
+  firebaseToken: z.string().optional(),
+  firebaseKey: z.string().optional(),
   
   name: z.string().min(1, 'Name cannot be empty').optional(),
   company: z.string().optional(),

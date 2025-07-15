@@ -199,27 +199,6 @@ export class UserCommonService {
           shouldFlush = true;
         }
 
-        // Update phone information (with duplicate check)
-        // if (userData.phone && !visitor.visitor_phone) {
-        //   const phoneUpdateAllowed = await this.checkPhoneUpdateAllowed(
-        //     visitor.edition, 
-        //     userData.phone, 
-        //     userData.id
-        //   );
-
-        //   this.logger.log(`Phone update allowed: ${phoneUpdateAllowed}`);
-
-        //   if (phoneUpdateAllowed) {
-        //     await this.prisma.event_visitor.update({
-        //       where: { id: visitor.id },
-        //       data: {
-        //         visitor_phone: userData.phone,
-        //       },
-        //     });
-
-        //     shouldFlush = true;
-        //   }
-        // }
 
         // Add this debug logging in the phone section:
         this.logger.log(`Phone update check:`);
@@ -285,13 +264,6 @@ export class UserCommonService {
             });
           }
         }
-
-        // Generate badge if visitor is completed and doesn't have one
-        // if (shouldComplete && 
-        //     !updatedVisitor?.badge && 
-        //     !this.shouldSkipBadgeGeneration(requestData)) {
-        //   await this.triggerBadgeGeneration(visitor, requestData);
-        // }
 
         this.logger.debug(`Event visitor ${visitor.id} synced for user ${userData.id}`);
       }
@@ -371,46 +343,6 @@ export class UserCommonService {
 
     return !invalidPatterns.some(pattern => pattern.test(designation));
   }
-
-  // private shouldSkipBadgeGeneration(requestData: UserUpsertRequestDto): boolean {
-  //   // Skip badge generation for certain event contexts
-  //   return !!(
-  //     requestData.eventId && 
-  //     ['attend', 'follow', 'interest', 'going', 'bookmark', 'connect', 'signup'].includes(requestData.action ?? '')
-  //   );
-  // }
-
-  // private async triggerBadgeGeneration(visitor: any, requestData: UserUpsertRequestDto): Promise<void> {
-  //   try {
-  //     // This would typically trigger an async badge generation process
-  //     // For now, we'll just log the requirement
-  //     this.logger.log(`Badge generation triggered for visitor ${visitor.id}, event ${visitor.event}`);
-
-  //     // In a real implementation, this might:
-  //     // 1. Create an async task
-  //     // 2. Call a badge generation service
-  //     // 3. Queue a background job
-      
-  //     // Example async task creation (commented out as it needs async task table):
-  //     /*
-  //     await this.prisma.async_process.create({
-  //       data: {
-  //         url: '/user/createBadge',
-  //         http_method: 'POST',
-  //         http_payload: `event_id=${visitor.event}&visitor_id=${visitor.id}&for=1&source=edit profile&curl=true`,
-  //         http_header: JSON.stringify(['Content-Type: application/x-www-form-urlencoded']),
-  //         priority: 1,
-  //         published: 1,
-  //         created: new Date(),
-  //       },
-  //     });
-  //     */
-
-  //   } catch (error) {
-  //     this.logger.error(`Badge generation trigger failed: ${error.message}`);
-  //     // Don't throw - badge generation is not critical
-  //   }
-  // }
 
   async getIncompleteVisitorCount(userId: number): Promise<number> {
     try {
@@ -1765,5 +1697,101 @@ export class UserCommonService {
     }
     
     return data;
+  }
+
+  async checkEmailVerificationFromOtp(userId: number, email: string): Promise<boolean> {
+    try {
+      if (!email || !userId) {
+        return false;
+      }
+
+      const otpRecord = await this.prisma.user_otp.findFirst({
+        where: {
+          user_id: userId,
+          channel: 'email',
+          value: email,
+          expired: { not: null },
+        },
+      });
+
+      return !!otpRecord;
+
+    } catch (error) {
+      this.logger.error(`Email OTP verification check failed: ${error.message}`);
+      return false;
+    }
+  }
+
+  async verifyFirebasePhone(
+    firebaseToken: string,
+    firebaseKey: string,
+    phone: string
+  ): Promise<boolean> {
+    try {
+      this.logger.log(`Verifying Firebase phone for: ${phone}`);
+
+      // Call Firebase API
+      const url = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseKey}&idToken=${firebaseToken}`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ idToken: firebaseToken }),
+      });
+
+      const userData = await response.json();
+
+      // Check for Firebase errors
+      if (userData.error) {
+        if (userData.error.code === 400) {
+          if (userData.error.message === 'INVALID_ID_TOKEN') {
+            this.logger.warn('Invalid Firebase token');
+            return false;
+          }
+          if (userData.error.details?.[0]?.reason === 'API_KEY_INVALID') {
+            this.logger.warn('Invalid Firebase key');
+            return false;
+          }
+        }
+        this.logger.warn(`Firebase error: ${userData.error.message}`);
+        return false;
+      }
+
+      // Check if user data exists
+      if (!userData.users || !userData.users[0]) {
+        this.logger.warn('No user data found in Firebase response');
+        return false;
+      }
+
+      const firebaseUser = userData.users[0];
+
+      // Compare phone numbers (normalize both)
+      const normalizedInputPhone = phone.replace(/\s/g, '');
+      const normalizedFirebasePhone = firebaseUser.phoneNumber?.replace(/\s/g, '') || '';
+
+      if (normalizedInputPhone !== normalizedFirebasePhone) {
+        this.logger.warn('Phone number mismatch with Firebase user');
+        return false;
+      }
+
+      // Check timestamp (within 120 seconds)
+      const currentEpoch = Math.floor(Date.now() / 1000);
+      const userLastLogin = Math.floor(firebaseUser.lastLoginAt / 1000);
+      const timeDifference = currentEpoch - userLastLogin;
+
+      if (timeDifference < 0 || timeDifference > 120) {
+        this.logger.warn('Firebase token expired or invalid timestamp');
+        return false;
+      }
+
+      this.logger.log('Firebase phone verification successful');
+      return true;
+
+    } catch (error) {
+      this.logger.error(`Firebase phone verification failed: ${error.message}`);
+      return false;
+    }
   }
 }

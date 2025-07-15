@@ -42,7 +42,8 @@ export class UserService {
       //   userData.phone_verified = true;
       // }
 
-      const shouldVerifyPhone = this.userValidationService.shouldVerifyPhoneInternal(userData);
+      // const shouldVerifyPhone = this.userValidationService.shouldVerifyPhoneInternal(userData);
+      const shouldVerifyPhone = await this.userValidationService.shouldVerifyPhoneInternal(userData);
 
 
       // Step 4: Handle encoded user verification
@@ -153,6 +154,7 @@ export class UserService {
           }
         }
       }
+      const phoneVerified = await this.userValidationService.shouldVerifyPhoneInternal(userData);
       
       const designationValidation = await this.userValidationService.validateDesignation(userData);
 
@@ -167,23 +169,10 @@ export class UserService {
             locationData: locationData,
             companyData: companyValidation.companyData,
             designationData: designationValidation.designationData,
+            phoneVerificationResult: phoneVerified,
           },
           tx
         );
-
-        // if (userData.phone && userData.updatePhone) {
-        //   const phoneResult = await this.phoneValidationService.upsertUserPhone(
-        //     updatedUser.id,
-        //     userData.phone,
-        //     Boolean(userData.updatePhone),
-        //     Boolean(userData.phoneVerified),
-        //     tx
-        //   );
-
-        //   if (!phoneResult.isValid && userData.phone_verified) {
-        //     throw new Error(phoneResult.message || 'Phone update failed');
-        //   }
-        // }
 
         if (userData.phone) {
           const currentPhone = existingUser.phone || '';
@@ -198,7 +187,8 @@ export class UserService {
           
           if (shouldUpdatePhone) {
             // Determine phone verification status
-            const phoneVerified = this.userValidationService.shouldVerifyPhoneInternal(userData);
+            // const phoneVerified = this.userValidationService.shouldVerifyPhoneInternal(userData);
+            const phoneVerified = await this.userValidationService.shouldVerifyPhoneInternal(userData);
             
             // Let the phone service handle duplicates and clearing logic
             const phoneResult = await this.phoneValidationService.upsertUserPhone(
@@ -212,12 +202,11 @@ export class UserService {
             if (!phoneResult.isValid) {
               throw new Error(phoneResult.message || 'Phone update failed');
             }
-          } else if (this.userValidationService.shouldVerifyPhoneInternal(userData) && !existingUser.phone_verified) {
-            // Phone didn't change but verification status should be updated
+          } else if (await this.userValidationService.shouldVerifyPhoneInternal(userData) && !existingUser.phone_verified) {            // Phone didn't change but verification status should be updated
             const phoneResult = await this.phoneValidationService.upsertUserPhone(
               updatedUser.id,
               userData.phone,
-              false, // don't update phone, just verification
+              false, 
               true,
               tx
             );
@@ -307,6 +296,8 @@ export class UserService {
       );
       
       const designationValidation = await this.userValidationService.validateDesignation(userData);
+      const phoneVerified = await this.userValidationService.shouldVerifyPhoneInternal(userData);
+
 
       let result = await this.prisma.$transaction(async (tx) => {
         const newUser = await this.userProcessingService.createUser(
@@ -316,6 +307,8 @@ export class UserService {
             locationData,
             companyData: companyValidation.companyData,
             designationData: designationValidation.designationData,
+            phoneVerificationResult: phoneVerified,
+
           },
           tx
         );
@@ -337,7 +330,8 @@ export class UserService {
 
         if (userData.phone) {
           this.logger.log(`Setting up phone for user: ${newUser.id}`);
-          const phoneVerified = this.userValidationService.shouldVerifyPhoneInternal(userData);
+          // const phoneVerified = this.userValidationService.shouldVerifyPhoneInternal(userData);
+          const phoneVerified = await this.userValidationService.shouldVerifyPhoneInternal(userData);
           
           const phoneResult = await this.phoneValidationService.upsertUserPhone(
             newUser.id,

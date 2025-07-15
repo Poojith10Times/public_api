@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserUpsertRequestDto } from '../dto/user-upsert-request.dto';
+import { UserCommonService } from './userCommon.service';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -33,6 +34,7 @@ export class UserValidationService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly userCommonService: UserCommonService,
 
   ) {}
 
@@ -294,7 +296,32 @@ export class UserValidationService {
     }
   }
 
-  shouldVerifyPhoneInternal(data: UserUpsertRequestDto): boolean {
+  // shouldVerifyPhoneInternal(data: UserUpsertRequestDto): boolean {
+  //   if (data.verificationSource && ['sms', 'autocall', 'whatsapp'].includes(data.verificationSource)) {
+  //     return true;
+  //   }
+
+  //   // SMS verification
+  //   if (data.userVerified && data.inviteVerify) {
+  //     return true;
+  //   }
+  //   // For now, always return true
+  //   return true;
+  // }
+
+  async shouldVerifyPhoneInternal(data: UserUpsertRequestDto): Promise<boolean> {
+    if (data.firebaseToken && data.firebaseKey && data.phone) {
+      const firebaseVerified = await this.userCommonService.verifyFirebasePhone(
+        data.firebaseToken,
+        data.firebaseKey,
+        data.phone
+      );
+      if (firebaseVerified) {
+        return true;
+      }
+    }
+
+    // Existing verification source checks
     if (data.verificationSource && ['sms', 'autocall', 'whatsapp'].includes(data.verificationSource)) {
       return true;
     }
@@ -303,8 +330,9 @@ export class UserValidationService {
     if (data.userVerified && data.inviteVerify) {
       return true;
     }
-    // For now, always return true
-    return true;
+
+    // Default to false instead of true
+    return false;
   }
 
   async validateDesignation(data: UserUpsertRequestDto): Promise<{
@@ -441,7 +469,7 @@ export class UserValidationService {
 
   validateEncodedUser(userId: number, encodedUser: string): ValidationResult {
     try {
-      const encryptionKey = '!@#hjka@#$jks*&@'; // Moved inside the method
+      const encryptionKey = '!@#hjka@#$jks*&@'; 
 
       const decodedData = this.decryptEncodedUser(userId, encodedUser);
 
@@ -478,7 +506,7 @@ export class UserValidationService {
     message?: string;
   } {
     try {
-      const encryptionKey = '!@#hjka@#$jks*&@'; // Moved inside the method
+      const encryptionKey = '!@#hjka@#$jks*&@'; 
 
       const cleanedEncodedUser = encodedUser
         .replace(/%2B/g, '+')
@@ -488,7 +516,7 @@ export class UserValidationService {
         .replace(/ /g, '+');
 
       const decodedBuffer = Buffer.from(cleanedEncodedUser, 'base64');
-      const decrypted = this.legacyDecrypt(decodedBuffer, encryptionKey);
+      const decrypted = this.Decrypt(decodedBuffer, encryptionKey);
 
       if (!decrypted) {
         return {
@@ -535,7 +563,7 @@ export class UserValidationService {
     }
   }
 
-  private legacyDecrypt(encryptedBuffer: Buffer, key: string): string | null {
+  private Decrypt(encryptedBuffer: Buffer, key: string): string | null {
     try {
       const keyBuffer = Buffer.from(key, 'utf8');
       const decryptedBuffer = Buffer.alloc(encryptedBuffer.length);
