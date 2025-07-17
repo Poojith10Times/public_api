@@ -47,15 +47,15 @@ export class UserService {
 
 
       // Step 4: Handle encoded user verification
-      if (userData.encodeUser && userData.userId) {
-        const encodedValidation = this.userValidationService.validateEncodedUser(
-          userData.userId, 
-          userData.encodeUser
-        );
-        if (encodedValidation.isValid && encodedValidation.data?.status === 'verified') {
-          userData.userUpdate = true;
-        }
-      }
+      // if (userData.encodeUser && userData.userId) {
+      //   const encodedValidation = this.userValidationService.validateEncodedUser(
+      //     userData.userId, 
+      //     userData.encodeUser
+      //   );
+      //   if (encodedValidation.isValid && encodedValidation.data?.status === 'verified') {
+      //     userData.userUpdate = true;
+      //   }
+      // }
 
       // Step 5: Location validation and resolution
       const locationValidation = await this.userValidationService.validateLocation(userData);
@@ -78,16 +78,16 @@ export class UserService {
             return await this.formatUserResponse(lookupResult.user);
         }
 
-        const whatsappCheck = await this.userLookupService.checkWhatsAppVerification(
-            lookupResult.user, 
-            userData
-        );
+        // const whatsappCheck = await this.userLookupService.checkWhatsAppVerification(
+        //     lookupResult.user, 
+        //     userData
+        // );
         
-        if (whatsappCheck.shouldVerifyPhone) {
-            // userData.phoneVerified = true;
-            userData.userUpdate = true;
-            userData.phone = whatsappCheck.phone;
-        }
+        // if (whatsappCheck.shouldVerifyPhone) {
+        //     // userData.phoneVerified = true;
+        //     userData.userUpdate = true;
+        //     userData.phone = whatsappCheck.phone;
+        // }
 
         if (userData.deactivate === 'false' && userData.deactivateId && 
             lookupResult.user.id === userData.deactivateId) {
@@ -126,8 +126,30 @@ export class UserService {
       this.logger.log(`Updating existing user: ${existingUser.id}`);
 
       // Determine update mode (full update vs partial update)
-      const isFullUpdate = userData.userUpdate === true;
+      // const isFullUpdate = userData.userUpdate === true;
+      let isFullUpdate = userData.changesMadeBy === existingUser.id;
+      const isPartialUpdate = userData.changesMadeBy === 29988050;
 
+      if (userData.encodeUser && userData.userId) {
+      const encodedValidation = this.userValidationService.validateEncodedUser(
+        userData.userId, 
+        userData.encodeUser
+      );
+      if (encodedValidation.isValid && encodedValidation.data?.status === 'verified') {
+        isFullUpdate = true; // Force full update for encoded user verification
+      }
+    }
+
+    // Handle WhatsApp verification (force full update)
+    const whatsappCheck = await this.userLookupService.checkWhatsAppVerification(
+      existingUser, 
+      userData
+    );
+
+    if (whatsappCheck.shouldVerifyPhone) {
+      userData.phone = whatsappCheck.phone;
+      isFullUpdate = true; // Force full update for WhatsApp verification
+    }
       // Company and designation validation
       const companyValidation = await this.userValidationService.validateCompany(
         userData, 
@@ -165,6 +187,7 @@ export class UserService {
           userData,
           {
             isFullUpdate,
+            isPartialUpdate,
             sourceFlags,
             locationData: locationData,
             companyData: companyValidation.companyData,

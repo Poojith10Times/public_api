@@ -7,6 +7,7 @@ import { UserCommonService } from './userCommon.service';
 
 export interface ProcessingOptions {
   isFullUpdate?: boolean;
+  isPartialUpdate?: boolean;
   sourceFlags: {
     noPublishedFlag: boolean;
     autoPhoneVerify: boolean;
@@ -40,7 +41,9 @@ export class UserProcessingService {
     
     try {
       const userId = existingUser.id;
+      // const isFullUpdate = options.isFullUpdate || false;
       const isFullUpdate = options.isFullUpdate || false;
+      const isPartialUpdate = options.isPartialUpdate || false;
       let userPersistFlag = false;
       let profileModified = false;
       let visitorES = false;
@@ -56,13 +59,13 @@ export class UserProcessingService {
         emailVerificationStatus = await this.userCommonService.checkEmailVerificationFromOtp(existingUser.id, userData.email);
       }
 
-      this.processBasicFields(userData, existingUser, updateData, isFullUpdate);
-      this.processLocationFields(userData, existingUser, updateData, options.locationData, isFullUpdate);
-      this.processCompanyFields(userData, existingUser, updateData, options.companyData, isFullUpdate);
-      this.processDesignationFields(userData, existingUser, updateData, options.designationData, isFullUpdate);
-      this.processSocialFields(userData, existingUser, updateData, isFullUpdate);
-      this.processVerificationFields(userData, existingUser, updateData, isFullUpdate, emailVerificationStatus, options.phoneVerificationResult || false);
-      this.processProfileFields(userData, existingUser, updateData, isFullUpdate);
+      this.processBasicFields(userData, existingUser, updateData, isFullUpdate, isPartialUpdate);
+      this.processLocationFields(userData, existingUser, updateData, options.locationData, isFullUpdate, isPartialUpdate);
+      this.processCompanyFields(userData, existingUser, updateData, options.companyData, isFullUpdate, isPartialUpdate);
+      this.processDesignationFields(userData, existingUser, updateData, options.designationData, isFullUpdate, isPartialUpdate);
+      this.processSocialFields(userData, existingUser, updateData, isFullUpdate, isPartialUpdate);
+      this.processVerificationFields(userData, existingUser, updateData, isFullUpdate, isPartialUpdate, emailVerificationStatus, options.phoneVerificationResult || false);
+      this.processProfileFields(userData, existingUser, updateData, isFullUpdate, isPartialUpdate);
 
       const finalUser = { ...existingUser, ...updateData };
   
@@ -198,13 +201,13 @@ export class UserProcessingService {
 
       const emailVerificationStatus = false;
 
-      this.processBasicFields(userData, null, createData, true);
-      this.processLocationFields(userData, null, createData, options.locationData, true);
-      this.processCompanyFields(userData, null, createData, options.companyData, true);
-      this.processDesignationFields(userData, null, createData, options.designationData, true);
-      this.processSocialFields(userData, null, createData, true);
-      this.processVerificationFields(userData, null, createData, true, emailVerificationStatus, options.phoneVerificationResult || false );
-      this.processProfileFields(userData, null, createData, true);
+      this.processBasicFields(userData, null, createData, true, false);
+      this.processLocationFields(userData, null, createData, options.locationData, true, false);
+      this.processCompanyFields(userData, null, createData, options.companyData, true, false);
+      this.processDesignationFields(userData, null, createData, options.designationData, true, false);
+      this.processSocialFields(userData, null, createData, true, false);
+      this.processVerificationFields(userData, null, createData, true, false, emailVerificationStatus, options.phoneVerificationResult || false );
+      this.processProfileFields(userData, null, createData, true, false);
 
       const isProfileComplete = !!(
         createData.name &&
@@ -263,9 +266,10 @@ export class UserProcessingService {
 
   private processBasicFields(
     userData: UserUpsertRequestDto,
-    existingUser: any | null, // null for create, user object for update
+    existingUser: any | null, 
     updateData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    isPartialUpdate: boolean
     ): void {
     const isCreateMode = existingUser === null;
 
@@ -279,7 +283,7 @@ export class UserProcessingService {
         if (existingUser.name !== userData.name) {
             updateData.name = userData.name;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing name is empty
         if (!existingUser.name) {
             updateData.name = userData.name;
@@ -297,7 +301,7 @@ export class UserProcessingService {
         if (existingUser.user_company !== userData.company) {
             updateData.user_company = userData.company;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing company is empty/null
         if (!existingUser.user_company || 
             existingUser.user_company.trim() === '' || 
@@ -317,7 +321,7 @@ export class UserProcessingService {
         if (existingUser.designation !== userData.designation) {
             updateData.designation = userData.designation;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing designation is empty/null
         if (!existingUser.designation || 
             existingUser.designation.trim() === '' || 
@@ -332,9 +336,13 @@ export class UserProcessingService {
         updateData.email = userData.newVerifiedEmail;
         updateData.email_verified = new Date();
     } else if (userData.mapEmail) {
-        if (isCreateMode || isFullUpdate || !existingUser?.email || existingUser.email === '') {
+        if (isCreateMode || isFullUpdate || (!existingUser?.email || existingUser.email === '')) {
         updateData.email = userData.mapEmail;
-        }
+      } else if (isPartialUpdate) {
+          if (!existingUser?.email || existingUser.email === '') {
+              updateData.email = userData.mapEmail;
+          }
+      }
     } else if (userData.email) {
         if (isCreateMode) {
         // Create mode: Always set if provided
@@ -344,7 +352,7 @@ export class UserProcessingService {
         if (existingUser.email !== userData.email) {
             updateData.email = userData.email;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if no existing email
         if (!existingUser.email) {
             updateData.email = userData.email;
@@ -360,7 +368,7 @@ export class UserProcessingService {
         if (existingUser.phone !== userData.phone) {
           updateData.phone = userData.phone;
         }
-      } else {
+      } else if (isPartialUpdate) {
         // Partial update: only if no existing phone or phone is too short
         if (!existingUser.phone || existingUser.phone.length <= 6) {
           updateData.phone = userData.phone;
@@ -378,7 +386,7 @@ export class UserProcessingService {
         if (existingUser.about !== userData.about) {
             updateData.about = userData.about;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing about is empty/null
         if (!existingUser.about || 
             existingUser.about.trim() === '' || 
@@ -398,7 +406,7 @@ export class UserProcessingService {
         if (existingUser.website !== userData.website) {
             updateData.website = userData.website;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing website is empty/null
         if (!existingUser.website || 
             existingUser.website.trim() === '' || 
@@ -425,7 +433,8 @@ export class UserProcessingService {
     existingUser: any | null,
     updateData: any,
     locationData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    isPartialUpdate: boolean
   ): void {
     const isCreateMode = existingUser === null;
 
@@ -443,7 +452,7 @@ export class UserProcessingService {
             connect: { id: locationData.cityId }
           };
         }
-      } else {
+      } else if (isPartialUpdate) {
         // Partial update: Only if existing city is empty/null
         if (!existingUser.city || 
             existingUser.city === '' || 
@@ -469,7 +478,7 @@ export class UserProcessingService {
             connect: { id: locationData.countryId }
           };
         }
-      } else {
+      } else if (isPartialUpdate) {
         // Partial update: Only if existing country is empty/null
         if (!existingUser.country || 
             existingUser.country === '' || 
@@ -487,7 +496,8 @@ export class UserProcessingService {
     existingUser: any | null,
     updateData: any,
     companyData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    isPartialUpdate: boolean
   ): void {
     const isCreateMode = existingUser === null;
 
@@ -502,7 +512,7 @@ export class UserProcessingService {
         updateData.company_user_companyTocompany = {
           connect: { id: companyData.companyId }
         };
-      } else {
+      } else if (isPartialUpdate) {
         // Partial update: Only if no existing company
         if (!existingUser.company) {
           updateData.company_user_companyTocompany = {
@@ -526,7 +536,8 @@ export class UserProcessingService {
     existingUser: any | null,
     updateData: any,
     designationData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    isPartialUpdate: boolean
     ): void {
     const isCreateMode = existingUser === null;
 
@@ -540,7 +551,7 @@ export class UserProcessingService {
         if (existingUser.designation_id !== designationData.designationId) {
             updateData.designation_id = designationData.designationId;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing designation_id is empty
         if (!existingUser.designation_id) {
             updateData.designation_id = designationData.designationId;
@@ -553,7 +564,8 @@ export class UserProcessingService {
     userData: UserUpsertRequestDto,
     existingUser: any | null,
     updateData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    isPartialUpdate: boolean
     ): void {
     const isCreateMode = existingUser === null;
 
@@ -577,7 +589,7 @@ export class UserProcessingService {
                 updateData.email_verified = new Date();
             }
             }
-        } else {
+        } else if (isPartialUpdate) {
             // Partial update: Only if existing LinkedIn ID is empty
             if (!existingUser.linkedin_id || 
                 existingUser.linkedin_id === '' || 
@@ -599,7 +611,7 @@ export class UserProcessingService {
             updateData.linkedin_profile = userData.metadata;
         } else if (isFullUpdate) {
             updateData.linkedin_profile = userData.metadata;
-        } else {
+        } else if (isPartialUpdate) {
             if (!existingUser.linkedin_profile || existingUser.linkedin_profile === '') {
             updateData.linkedin_profile = userData.metadata;
             }
@@ -627,7 +639,7 @@ export class UserProcessingService {
                 updateData.email_verified = new Date();
             }
             }
-        } else {
+        } else if (isPartialUpdate) {
             // Partial update: Only if existing Facebook ID is empty
             if (!existingUser.facebook_id || 
                 existingUser.facebook_id === '' || 
@@ -649,7 +661,7 @@ export class UserProcessingService {
             updateData.profile = userData.metadata;
         } else if (isFullUpdate) {
             updateData.profile = userData.metadata;
-        } else {
+        } else if (isPartialUpdate) {
             if (!existingUser.profile || existingUser.profile === '') {
             updateData.profile = userData.metadata;
             }
@@ -677,7 +689,7 @@ export class UserProcessingService {
                 updateData.email_verified = new Date();
             }
             }
-        } else {
+        } else if (isPartialUpdate) {
             // Partial update: Only if existing Google ID is empty
             if (!existingUser.google_id || 
                 existingUser.google_id === '' || 
@@ -699,7 +711,7 @@ export class UserProcessingService {
             updateData.google_profile = userData.metadata;
         } else if (isFullUpdate) {
             updateData.google_profile = userData.metadata;
-        } else {
+        } else if (isPartialUpdate) {
             if (!existingUser.google_profile || existingUser.google_profile === '') {
             updateData.google_profile = userData.metadata;
             }
@@ -717,7 +729,7 @@ export class UserProcessingService {
         if (existingUser.twitter_id !== userData.twitterId) {
             updateData.twitter_id = userData.twitterId;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing Twitter ID is empty
         if (!existingUser.twitter_id || 
             existingUser.twitter_id === '' || 
@@ -738,7 +750,7 @@ export class UserProcessingService {
         if (existingUser.wikipedia !== userData.wikipediaId) {
             updateData.wikipedia = userData.wikipediaId;
         }
-        } else {
+        } else if (isPartialUpdate) {
         // Partial update: Only if existing Wikipedia is empty
         if (!existingUser.wikipedia || 
             existingUser.wikipedia === '' || 
@@ -753,18 +765,15 @@ export class UserProcessingService {
     if (!isCreateMode && userData.facebookId === 'remove') {
       updateData.facebook_id = null;
       updateData.profile = null;
-      return;
     }
     if (!isCreateMode && userData.linkedinId === 'remove') {
       updateData.linkedin_id = null;
       updateData.linkedin_profile = null;
-      return;
     }
 
     if (!isCreateMode && userData.googleId === 'remove') {
       updateData.google_id = null;
       updateData.google_profile = null;
-      return;
     }
 
 
@@ -775,6 +784,7 @@ export class UserProcessingService {
     existingUser: any | null,
     updateData: any,
     isFullUpdate: boolean,
+    isPartialUpdate: boolean,
     emailVerificationStatus: boolean = false,
     phoneVerificationResult: boolean = false 
     ): void {
@@ -836,7 +846,8 @@ export class UserProcessingService {
     userData: UserUpsertRequestDto,
     existingUser: any | null,
     updateData: any,
-    isFullUpdate: boolean
+    isFullUpdate: boolean,
+    isPartialUpdate: boolean
     ): void {
     const isCreateMode = existingUser === null;
 
@@ -887,7 +898,7 @@ export class UserProcessingService {
         } else {
           updateData.profile_picture = userData.profilePicture;
         }
-      } else {
+      } else if (isPartialUpdate) {
         // Partial update: Only if existing picture is empty/null 
         if (!existingUser.profile_picture || 
             existingUser.profile_picture === '' || 

@@ -52,7 +52,8 @@ export class UserValidationService {
         select: { id: true, published: true },
       });
 
-      if (!userExists || !userExists.published) {
+      // if (!userExists || !userExists.published) {
+      if (!userExists) {
         return {
           isValid: false,
           message: 'Invalid changesMadeBy user',

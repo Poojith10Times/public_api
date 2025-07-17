@@ -111,7 +111,7 @@ export const UserUpsertRequestSchema = z.object({
   mapEmail: emailValidation,
   
   // User management
-  userUpdate: z.union([z.string(), z.number(), z.boolean()]).optional(),  // remove 
+  // userUpdate: z.union([z.string(), z.number(), z.boolean()]).optional(),  // remove 
   deactivate: z.string().optional(),
   deactivateId: z.number().optional(),
   // updatePublished: z.union([z.string(), z.number(), z.boolean()]).optional(), // remove 
