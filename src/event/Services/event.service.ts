@@ -5,18 +5,12 @@ import { EditionService } from '../common/edition.service';
 import { CreateEventRequestDto } from '../dto/create-event-request.dto';
 import { CreateEventResponseDto } from '../dto/create-event-response.dto';
 import { ReviewData, UnifiedReviewService } from '../../common/review.service';
-// import { EventReplicaService } from '../common/event-replica.service';
 import { S3Service } from '../../common/s3.service';
 import { EmailService } from '../../common/email.service';
-// import { StatsProcessingService } from '../common/stats-processing.service';
 import { CommonService } from '../common/common.service';
-// import { FutureEditionService } from '../common/future.edition.service';
-// import { ProductManagementService } from '../common/product-management.service';
-// import { SubVenueManagementService } from '../common/sub-venue-management.service';
 import { EventUpsertRequestDto } from '../dto/upsert-event-request.dto';
 import { EventUpsertResponseDto, createSuccessResponse, createErrorResponse } from '../dto/upsert-event-response.dto';
 import { ElasticsearchService } from 'src/elasticsearch/elasticsearch.service';
-// import { EventDataTransformerService } from '../common/event-data-transformer';
 import { FirebaseSessionService } from 'src/common/firebase-session.service';
 import { RabbitmqService } from '../../common/rabbitmq.service';
 import { createEventReviewData } from '../dto/create-review.dto';
@@ -46,47 +40,43 @@ export class EventService {
     private validationService: ValidationService,
     private editionService: EditionService,
     private elasticsearchService: ElasticsearchService,
-    // private eventReplicaService: EventReplicaService,
-    // private eventDataTransformerService: EventDataTransformerService,
     private rabbitMQService: RabbitmqService, 
     private s3Service: S3Service,
     private emailService: EmailService,  
     private unifiedReviewService: UnifiedReviewService, 
-    // private statsProcessingService: StatsProcessingService,
     private commonService: CommonService,
-    // private futureEditionService: FutureEditionService,
-    // private productManagementService: ProductManagementService,
-    // private subVenueManagementService: SubVenueManagementService,
     private rabbitmqService: RabbitmqService,
     private firebaseSessionService: FirebaseSessionService,
 
   ) {}
 
 
-  async upsertEvent(eventData: EventUpsertRequestDto): Promise<EventUpsertResponseDto> {
+  async upsertEvent(eventData: EventUpsertRequestDto, userId: number): Promise<EventUpsertResponseDto> {
       try {
         console.log('Received eventData:', JSON.stringify(eventData, null, 2));
-  
-        // Future edition creation/update
-        if (eventData.future && 
-          typeof eventData.future === 'string' && 
-          eventData.future.trim() !== '') {
-          return await this.handleFutureEdition(eventData);
+
+        const futureDetection = eventData.editionId ? 
+          { isFutureEdition: false, reason: 'Explicit edition ID provided' } :
+          await this.detectFutureEditionScenario(eventData);
+
+        if (futureDetection.isFutureEdition) {
+          console.log('Auto-detected future edition - processing separately');
+          return await this.handleAutoDetectedFutureEdition(eventData, userId);
         }
   
         // Determine if this is create or update
-        const isUpdate = eventData.id && typeof eventData.id === 'number';
-        console.log('Is update:', isUpdate, 'Event ID:', eventData.id);
-  
+        const isUpdate = eventData.eventId && typeof eventData.eventId === 'number';
+        console.log('Is update:', isUpdate, 'Event ID:', eventData.eventId);
+
         let result: EventUpsertResponseDto;
         
         if (isUpdate) {
           console.log('Processing event update...');
-          result = await this.updateEvent(eventData);
+          result = await this.updateEvent(eventData, userId);
         } else {
           // result = await this.eventCreationService.createEvent(eventData);
-          result = await this.updateEvent(eventData);
-  
+          result = await this.updateEvent(eventData, userId);
+
         }
   
         // Post-processing: Send to RabbitMQ and Elasticsearch
@@ -100,420 +90,770 @@ export class EventService {
       }
     }
 
-  private async handleFutureEdition(eventData: EventUpsertRequestDto): Promise<EventUpsertResponseDto> {
+
+   private async detectFutureEditionScenario(eventData: EventUpsertRequestDto): Promise<{
+      isFutureEdition: boolean;
+      reason?: string;
+      currentEdition?: any;
+    }> {
+      // Must have event ID and dates for future edition detection
+      if (!eventData.eventId || !eventData.startDate || !eventData.endDate) {
+        return { 
+          isFutureEdition: false, 
+          reason: 'Missing required data for future edition detection' 
+        };
+      }
+      
+      try {
+        console.log('Detecting future edition scenario...');
+        
+        // Get current event with edition
+        const existingEvent = await this.prisma.event.findUnique({
+          where: { id: eventData.eventId },
+          include: {
+            event_edition_event_event_editionToevent_edition: true
+          }
+        });
+        
+        if (!existingEvent?.event_edition_event_event_editionToevent_edition) {
+          return { 
+            isFutureEdition: false, 
+            reason: 'No current edition found' 
+          };
+        }
+        
+        const currentEdition = existingEvent.event_edition_event_event_editionToevent_edition;
+        
+        // CRITICAL: Check for null dates before creating Date objects
+        if (!currentEdition.start_date || !currentEdition.end_date) {
+          return { 
+            isFutureEdition: false, 
+            reason: 'Current edition missing required dates' 
+          };
+        }
+        
+        const now = new Date();
+        const newStart = new Date(eventData.startDate);
+        const newEnd = new Date(eventData.endDate);
+        const currentStart = new Date(currentEdition.start_date); 
+        const currentEnd = new Date(currentEdition.end_date);
+        
+        console.log('Future Edition Analysis:', {
+          currentStart: currentStart.toISOString(),
+          currentEnd: currentEnd.toISOString(),
+          newStart: newStart.toISOString(),
+          newEnd: newEnd.toISOString(),
+          now: now.toISOString()
+        });
+        
+        // KEY CONDITIONS for future edition 
+        
+        // 1. Current edition must still exist and be valid
+        const currentStillActive = currentEnd >= now;
+        
+        // 2. New dates must be in the future
+        const datesInFuture = newStart > now && newEnd > now;
+        
+        // 3. New dates must be AFTER current edition dates
+        const datesAfterCurrent = newStart > currentEnd;
+        
+        // 4. Must not be a rehost scenario (rehost = current edition ended)
+        const isNotRehost = currentEnd >= now;
+        
+        console.log('Future Edition Conditions:', {
+          currentStillActive,
+          datesInFuture,
+          datesAfterCurrent,
+          isNotRehost
+        });
+        
+        const isFutureEdition = currentStillActive && 
+                              datesInFuture && 
+                              datesAfterCurrent && 
+                              isNotRehost;
+        
+        console.log('Future Edition Result:', isFutureEdition);
+        
+        return { 
+          isFutureEdition,
+          currentEdition,
+          reason: isFutureEdition 
+            ? 'Auto-detected future edition scenario' 
+            : `Not future edition: active=${currentStillActive}, future=${datesInFuture}, after=${datesAfterCurrent}, notRehost=${isNotRehost}`
+        };
+        
+      } catch (error) {
+        console.error('Future edition detection failed:', error);
+        return { 
+          isFutureEdition: false, 
+          reason: `Detection failed: ${error.message}` 
+        };
+      }
+    }
+
+  private async handleAutoDetectedFutureEdition(
+    eventData: EventUpsertRequestDto, 
+    userId: number
+  ): Promise<EventUpsertResponseDto> {
     try {
-      // Step 1: Basic input validation
-      if (!eventData.id) {
-        return createErrorResponse(['Event ID is required for future edition']);
-      }
-
-      if (!eventData.future) {
-        return createErrorResponse(['Future edition data is required']);
-      }
-
-      // Step 2: Parse and validate all data in one go
-      const validationResult = await this.validateFutureEditionData(eventData);
+      console.log('Processing auto-detected future edition with proper optimization');
+      
+      // Step 1: ALL VALIDATIONS OUTSIDE TRANSACTION
+      const validationResult = await this.validateFutureEditionData(eventData, userId);
       if (!validationResult.isValid) {
         return createErrorResponse(validationResult.messages);
       }
 
-      // Step 3: Process transaction with validated data 
-      const { future, company, venue, city, originalEdition } = validationResult.validatedData!;
+      const { existingEvent, company, location, eventTypeData, categoryData } = validationResult.validatedData!;
+      
+      // Step 2: PRE-LOAD DATA OUTSIDE TRANSACTION
+      const existingFutureEditionData = await this.preloadFutureEditionData(
+        eventData.eventId!,
+        eventData.startDate!,
+        eventData.endDate!
+      );
 
-      const result = await this.prisma.$transaction(async (tx) => {
+      // Step 3: MINIMAL TRANSACTION - ONLY CRITICAL DATABASE WRITES
+      const coreResult = await this.prisma.$transaction(async (tx) => {
         let futureEdition;
         let isNew = true;
-
-        if (future.editionId) {
+        
+        if (existingFutureEditionData.existingEdition) {
           // Update existing future edition
-          futureEdition = await tx.event_edition.findUnique({
-            where: { id: parseInt(future.editionId) }
-          });
-
-          if (!futureEdition) {
-            throw new Error('invalid editionId');
-          }
-
           isNew = false;
-          
-          await tx.event_edition.update({
-            where: { id: futureEdition.id },
-            data: {
-              start_date: new Date(future.startDate),
-              end_date: new Date(future.endDate),
-              modified: new Date(),
-              modifiedby: eventData.changesMadeBy,
-              website: future.website,
-              eep_process: eventData.eepProcess,
-              city: city?.id || city,
-            }
-          });
+          futureEdition = await this.updateExistingFutureEdition(
+            existingFutureEditionData.existingEdition,
+            eventData,
+            company,
+            location,
+            userId,
+            tx
+          );
         } else {
           // Create new future edition
-          const editionNumber = originalEdition ? (originalEdition.edition_number || 0) + 1 : 1;
-
-          futureEdition = await tx.event_edition.create({
-            data: {
-              event: eventData.id!,
-              start_date: new Date(future.startDate),
-              end_date: new Date(future.endDate),
-              company_id: company?.id,
-              venue: venue?.id,
-              city: city?.id || city,
-              edition_number: editionNumber,
-              createdby: eventData.changesMadeBy,
-              website: future.website,
-              eep_process: eventData.eepProcess || 0,
-              online_event: (city?.id || city) === 1 ? 1 : null,
-            }
-          });
-        }
-
-        // Handle timing data
-        if (future.timing) {
-          await this.upsertEventData(
-            tx, 
-            eventData.id!, 
-            futureEdition.id, 
-            'timing', 
-            'JSON', 
-            future.timing, 
-            eventData.changesMadeBy
+          futureEdition = await this.createNewFutureEdition(
+            eventData,
+            company,
+            location,
+            existingFutureEditionData.maxEditionNumber,
+            userId,
+            tx
           );
         }
-
-        // Handle description
-        if (future.description) {
-          await this.upsertEventData(
-            tx, 
-            eventData.id!, 
-            futureEdition.id, 
-            'desc', 
-            'TEXT', 
-            future.description, 
-            eventData.changesMadeBy
-          );
-        }
-
-        // Handle short description
-        if (future.short_desc) {
-          await this.upsertEventData(
-            tx, 
-            eventData.id!, 
-            futureEdition.id, 
-            'short_desc', 
-            'TEXT', 
-            future.short_desc, 
-            eventData.changesMadeBy
-          );
-        }
+        
+        // ONLY CORE EVENT DATA IN TRANSACTION
+        await this.createCoreEventData(eventData.eventId!, futureEdition.id, eventData, userId, tx);
 
         return {
           valid: true,
-          message: isNew ? 'successfully added' : 'successfully updated',
-          editionId: futureEdition.id
+          message: isNew ? 'Future edition created successfully' : 'Future edition updated successfully',
+          editionId: futureEdition.id,
+          isNew
         };
       }, {
-        maxWait: 5000,
-        timeout: 10000,
+        maxWait: 1000,   // Reduced timeout
+        timeout: 20000,  // Reduced timeout
       });
-
-      if (!result.valid) {
-        return createErrorResponse([result.message ?? 'Future edition processing failed']);
+      
+      if (!coreResult.valid) {
+        return createErrorResponse([coreResult.message ?? 'Future edition processing failed']);
       }
 
-      return createSuccessResponse(
-        { id: eventData.id, edition: result.editionId },
-        result.message ?? 'Future edition processed successfully'
+      // Step 4: ALL COMPLEX OPERATIONS OUTSIDE TRANSACTION
+      await this.processComplexFutureEditionData(
+        eventData.eventId!,
+        coreResult.editionId,
+        eventData,
+        categoryData,
+        userId
       );
 
+      // Step 5: NON-BLOCKING POST-PROCESSING
+      setImmediate(() => {
+        this.postProcessFutureEdition(eventData.eventId!, coreResult.editionId, eventData);
+      });
+      
+      return createSuccessResponse(
+        { 
+          eventId: eventData.eventId, 
+          edition: coreResult.editionId,
+          futureEdition: true,
+          isNew: coreResult.isNew
+        },
+        coreResult.message ?? 'Future edition processed successfully'
+      );
+      
     } catch (error) {
+      console.error('Future edition processing failed:', error);
       return createErrorResponse([error.message || 'Future edition processing failed']);
     }
   }
-  
 
-  private async validateFutureEditionData(eventData: EventUpsertRequestDto): Promise<{
-    isValid: boolean;
-    messages: string[];
-    validatedData?: {
-      future: FutureEventData;
-      company: any;
-      venue: any;
-      city: any;
-      originalEdition: any;
-    };
-  }> {
-    const messages: string[] = [];
-    let validatedData: any = {};
-
-    try {
-      // Parse future data
-      const future: FutureEventData = JSON.parse(eventData.future!);
-      validatedData.future = future;
-
-      // Validate event exists
-      const eventValidation = await this.validationService.validateEventExists(eventData.id!);
-      if (!eventValidation.isValid) {
-        messages.push(eventValidation.message ?? 'Event validation failed');
-      }
-
-      // Validate dates format
-      const dateValidation = this.validationService.validateDates(
-        future.startDate,
-        future.endDate
-      );
-      if (!dateValidation.isValid) {
-        messages.push(dateValidation.message ?? 'Unknown date validation error');
-      }
-
-      // Validate website format
-      if (future.website && !this.validationService.validateWebsiteFormat(future.website)) {
-        messages.push('website is not in correct format');
-      }
-
-      // Validate future dates are greater than current date
-      const futureStart = new Date(future.startDate);
-      const futureEnd = new Date(future.endDate);
-      const now = new Date();
-
-      if ((futureEnd <= now || futureStart <= now) && future.expiredControl !== 1) {
-        messages.push('please mention the Dates greater than current');
-      }
-
-      if (futureEnd < futureStart) {
-        messages.push('Start date should be greater than end date');
-      }
-
-      // Validate date conflicts with existing editions
-      const conflictValidation = await this.validationService.validateDateConflicts(
-        eventData.id!,
-        future.startDate,
-        future.endDate,
-        future.editionId ? parseInt(future.editionId) : undefined
-      );
-      if (!conflictValidation.isValid) {
-        messages.push(conflictValidation.message ?? 'Date conflict validation error');
-      }
-
-      // Validate company if provided
-      let company = null;
-      if (future.companyId) {
-        const companyValidation = await this.validationService.validateCompany(
-          parseInt(future.companyId)
-        );
-        if (!companyValidation.isValid) {
-          messages.push('companyId does not exist');
-        } else {
-          company = companyValidation.company;
-        }
-      }
-      validatedData.company = company;
-
-      // Validate venue if provided
-      let venue: { id: number; city: number; city_venue_cityTocity?: any } | null = null;
-      if (future.venue) {
-        const venueValidation = await this.validationService.validateVenue(
-          parseInt(future.venue)
-        );
-        if (!venueValidation.isValid) {
-          messages.push('venue does not exist');
-        } else {
-          venue = venueValidation.venue;
-        }
-      }
-      validatedData.venue = venue;
-
-      // Validate city if provided
-      let city = null;
-      if (future.city) {
-        const cityValidation = await this.validationService.validateCity(
-          parseInt(future.city)
-        );
-        if (!cityValidation.isValid) {
-          messages.push('city does not exist');
-        } else {
-          city = cityValidation.city;
-        }
-      }
-
-      // Validate city-venue relationship
-      if (city && venue) {
-        const cityObj = city as { id: number; [key: string]: any };
-        const venueObj = venue as { city: number; [key: string]: any };
-        
-        if (cityObj.id !== venueObj.city) {
-          messages.push('city does not match with venue');
-        }
-      }
-
-      // Use venue's city if city not provided
-      if (!city && venue && venue.city_venue_cityTocity) {
-        city = venue.city_venue_cityTocity;
-      }
-
-      // Get original edition for location validation
-      const originalEdition = await this.prisma.event_edition.findFirst({
-        where: { event: eventData.id },
-        orderBy: { created: 'asc' }
-      });
-      validatedData.originalEdition = originalEdition;
-
-      // Validate location proximity if needed
-      if (city && originalEdition?.city) {
-        const originalCity = await this.prisma.city.findUnique({
-          where: { id: originalEdition.city }
-        });
-
-        if (originalCity) {
-          const locationValidation = await this.validateLocationProximity(
-            originalCity,
-            city
-          );
-          if (!locationValidation.valid) {
-            messages.push(locationValidation.message || 'Location proximity validation failed');
-          }
-        }
-      }
-
-      // Set final city value
-      validatedData.city = city || originalEdition?.city;
-
-      return {
-        isValid: messages.length === 0,
-        messages,
-        validatedData: messages.length === 0 ? validatedData : undefined,
-      };
-
-    } catch (parseError) {
-      return {
-        isValid: false,
-        messages: ['Invalid future event format'],
-      };
-    }
-  }
-
-  private async validateLocationProximity(
-    originalCity: any,
-    newCity: any
-  ): Promise<{ valid: boolean; message?: string }> {
-    // Online events (city ID 1) 
-    if (newCity.id === 1 && originalCity.id !== 1) {
-      return { valid: true }; // Allow physical to online
-    }
-    
-    if (newCity.id !== 1 && originalCity.id === 1) {
-      return { valid: true }; // Allow online to physical
-    }
-
-    // Calculate distance between cities
-    const R = 6371; // Earth's radius in km
-    const radius = 50; // 50km radius allowed
-
-    const lat1 = parseFloat(originalCity.geo_lat);
-    const lon1 = parseFloat(originalCity.geo_long);
-    const lat2 = parseFloat(newCity.geo_lat);
-    const lon2 = parseFloat(newCity.geo_long);
-
-    if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) {
-      return { valid: false, message: 'latitude or longitude not valid' };
-    }
-
-    const maxLat = lat1 + (radius / R) * (180 / Math.PI);
-    const minLat = lat1 - (radius / R) * (180 / Math.PI);
-    const maxLon = lon1 + (radius / R) * (180 / Math.PI) / Math.cos(lat1 * Math.PI / 180);
-    const minLon = lon1 - (radius / R) * (180 / Math.PI) / Math.cos(lat1 * Math.PI / 180);
-
-    if (lat2 >= minLat && lat2 <= maxLat && lon2 >= minLon && lon2 <= maxLon) {
-      return { valid: true };
-    }
-
-    if (newCity.id === originalCity.id) {
-      return { valid: true }; // Same city is always allowed
-    }
-
-    return { 
-      valid: false, 
-      message: 'city is different from current edition city' 
-    };
-  }
-
-  private async upsertEventData(
-    tx: any,
+  private async createCoreEventData(
     eventId: number,
     editionId: number,
-    title: string,
-    dataType: string,
-    value: string,
-    userId: number
-  ) {
-    const existing = await tx.event_data.findFirst({
-      where: {
-        event: eventId,
-        event_edition: editionId,
-        title: title
-      }
-    });
+    eventData: EventUpsertRequestDto,
+    userId: number,
+    tx: any
+  ): Promise<void> {
+    const eventDataEntries: Array<{
+      title: string;
+      data_type: string;
+      value: string;
+    }> = [];
 
-    if (existing) {
-      await tx.event_data.update({
-        where: { id: existing.id },
-        data: {
-          value: value,
-          modifiedby: userId,
-          modified: new Date()
-        }
+    // Only add ESSENTIAL event data that must be in transaction
+    if (eventData.description) {
+      eventDataEntries.push({
+        title: 'desc',
+        data_type: 'TEXT',
+        value: eventData.description,
       });
-    } else {
-      await tx.event_data.create({
-        data: {
-          event: eventId,
-          event_edition: editionId,
-          title: title,
-          data_type: dataType,
-          value: value,
-          createdby: userId,
-        }
+    }
+
+    if (eventData.shortDesc) {
+      eventDataEntries.push({
+        title: 'short_desc',
+        data_type: 'TEXT',
+        value: eventData.shortDesc,
       });
+    }
+
+    if (eventData.timing) {
+      eventDataEntries.push({
+        title: 'timing',
+        data_type: 'JSON',
+        value: typeof eventData.timing === 'string' ? eventData.timing : JSON.stringify(eventData.timing),
+      });
+    }
+
+    // if (eventData.stats) {
+    //   eventDataEntries.push({
+    //     title: 'stats',
+    //     data_type: 'JSON',
+    //     value: typeof eventData.stats === 'string' ? eventData.stats : JSON.stringify(eventData.stats),
+    //   });
+    // }
+
+
+    // Batch create all event data
+    if (eventDataEntries.length > 0) {
+      const createOperations = eventDataEntries.map(entry => 
+        tx.event_data.upsert({
+          where: {
+            event_event_edition_title: {
+              event: eventId,
+              event_edition: editionId,
+              title: entry.title
+            }
+          },
+          update: {
+            value: entry.value,
+            modifiedby: userId,
+            modified: new Date(),
+          },
+          create: {
+            event: eventId,
+            event_edition: editionId,
+            data_type: entry.data_type,
+            title: entry.title,
+            value: entry.value,
+            createdby: userId,
+          }
+        })
+      );
+
+      await Promise.all(createOperations);
     }
   }
 
+  private async processComplexFutureEditionData(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    categoryData: any,
+    userId: number
+  ): Promise<void> {
+    const operations: Promise<any>[] = [];
 
-    private async updateEvent(eventData: EventUpsertRequestDto): Promise<EventUpsertResponseDto> {
+    // Process stats
+    if (eventData.stats) {
+      operations.push(this.processFutureStats(eventId, editionId, eventData.stats, userId));
+    }
+
+    // Process contacts (independent operation)
+    if (eventData.contact) {
+      operations.push(this.processFutureContacts(eventId, eventData.contact, userId));
+    }
+
+    // Process products and categories
+    if (eventData.product || eventData.category) {
+      operations.push(this.processFutureProductsAndCategories(
+        eventId, editionId, eventData, categoryData, userId
+      ));
+    }
+
+    // Process event settings
+    if (eventData.eventSettings) {
+      operations.push(this.processFutureEventSettings(eventId, eventData.eventSettings, userId));
+    }
+
+    // Process sub-venues
+    if (eventData.subVenue) {
+      // Get venue ID from the created edition
+      operations.push(this.processFutureSubVenuesWithQuery(eventId, editionId, eventData.subVenue, userId));
+    }
+
+    if (eventData.salesAction || eventData.salesActionBy || eventData.salesStatus || eventData.salesRemark) {
+      operations.push(this.processFutureSalesData(eventId, editionId, eventData, userId));
+    }
+
+    // Process attachments
+    operations.push(this.processFutureAttachments(eventId, editionId, eventData, userId));
+
+    // Execute all operations in parallel
+    if (operations.length > 0) {
+      await Promise.all(operations);
+    }
+  }
+
+  private async processFutureStats(
+    eventId: number,
+    editionId: number,
+    statsData: any,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.commonService.processEventStats(eventId, editionId, statsData, userId);
+    } catch (error) {
+      this.logger.warn(`Stats processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureSubVenuesWithQuery(
+    eventId: number,
+    editionId: number,
+    subVenueData: string,
+    userId: number
+  ): Promise<void> {
+    try {
+      // Query the actual venue ID from the created edition
+      const edition = await this.prisma.event_edition.findUnique({
+        where: { id: editionId },
+        select: { venue: true }
+      });
+      
+      if (edition?.venue) {
+        await this.commonService.processSubVenues(
+          eventId, editionId, subVenueData, edition.venue, userId
+        );
+      } else {
+        this.logger.warn(`No venue found for sub-venue processing in edition ${editionId}`);
+      }
+    } catch (error) {
+      this.logger.warn(`Sub-venue processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureSalesData(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.processSalesData(eventData, editionId, userId);
+    } catch (error) {
+      this.logger.warn(`Sales processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureContacts(
+    eventId: number,
+    contactsData: string,
+    userId: number
+  ): Promise<void> {
+    try {
+      const contacts = JSON.parse(contactsData);
+      const validation = await this.commonService.validateContactEmails(contacts);
+      
+      if (validation.valid) {
+        await this.commonService.addEventContacts(eventId, contactsData, userId);
+      } else {
+        this.logger.warn(`Contact validation failed for future edition: ${validation.message}`);
+      }
+    } catch (error) {
+      this.logger.error('Future edition contact processing failed:', error);
+    }
+  }
+
+  private async processFutureProductsAndCategories(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    categoryData: any,
+    userId: number
+  ): Promise<void> {
+    try {
+      let productCategoryIds: number[] = [];
+
+      // Process products first
+      if (eventData.product) {
+        const productResult = await this.commonService.processEventProducts(
+          eventId, editionId, eventData.product, userId
+        );
+        productCategoryIds = productResult.categoryIds;
+      }
+
+      // Process categories
+      if (eventData.category || productCategoryIds.length > 0) {
+        const userCategoryIds = categoryData?.categoryIds || [];
+        const allCategories = [...userCategoryIds, ...productCategoryIds];
+        const uniqueCategories = [...new Set(allCategories)];
+        
+        await this.commonService.processEventCategories(
+          eventId, uniqueCategories, userId
+        );
+      }
+    } catch (error) {
+      this.logger.error('Products/Categories processing failed for future edition:', error);
+    }
+  }
+
+  private async processFutureEventSettings(
+    eventId: number,
+    eventSettingsData: string,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.processEventSettings(eventId, eventSettingsData, userId);
+    } catch (error) {
+      this.logger.warn(`Event settings processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureSubVenues(
+    eventId: number,
+    editionId: number,
+    subVenueData: string,
+    venueId: number,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.commonService.processSubVenues(
+        eventId, editionId, subVenueData, venueId, userId
+      );
+    } catch (error) {
+      this.logger.warn(`SubVenue processing failed for future edition: ${error.message}`);
+    }
+  }
+
+  private async processFutureAttachments(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number
+  ): Promise<void> {
+    try {
+      await this.processAttachments(eventData, eventId, editionId, userId, null);
+    } catch (error) {
+      this.logger.warn(`Attachments processing failed for future edition: ${error.message}`);
+    }
+  }
+
+    private async validateFutureEditionData(eventData: EventUpsertRequestDto, userId: number): Promise<{
+      isValid: boolean;
+      messages: string[];
+      validatedData?: any;
+    }> {
+      const messages: string[] = [];
+      let validatedData: any = {};
+
       try {
-        // Step 1: Perform all validations upfront
-        const validationResult = await this.validateEventUpdateData(eventData);
+        // Step 1: Validate user
+        const userValidation = await this.validationService.validateUser(userId);
+        if (!userValidation.isValid) {
+          messages.push(userValidation.message ?? 'User validation failed');
+        }
+
+        // Step 2: Validate event exists
+        if (typeof eventData.eventId !== 'number') {
+          messages.push('Event id is required for future edition');
+        } else {
+          const eventValidation = await this.validationService.validateEventExists(eventData.eventId);
+          if (!eventValidation.isValid) {
+            messages.push(eventValidation.message ?? 'Event validation failed');
+          } else {
+            validatedData.existingEvent = eventValidation.event;
+          }
+        }
+
+        // Step 3: Validate dates (required for future edition)
+        if (!eventData.startDate || !eventData.endDate) {
+          messages.push('Start date and end date are required for future edition');
+        } else {
+          const dateValidation = this.validationService.validateDates(
+            eventData.startDate,
+            eventData.endDate
+          );
+          if (!dateValidation.isValid) {
+            messages.push(dateValidation.message ?? 'Date validation failed');
+          }
+        }
+
+        // Step 4: Validate website format if provided
+        if (eventData.website && !this.validationService.validateWebsiteFormat(eventData.website)) {
+          messages.push('website is not in correct format');
+        }
+
+        // Step 5: Validate company if provided
+        let company = null;
+        if (eventData.company) {
+          const companyValidation = await this.validationService.validateCompany(eventData.company);
+          if (!companyValidation.isValid) {
+            messages.push(companyValidation.message ?? 'Company validation failed');
+          } else {
+            company = companyValidation.company;
+          }
+        }
+        validatedData.company = company;
+
+        // Step 6: Validate location if provided
+        let location: any = null;
+        if (eventData.venue || eventData.city) {
+          location = await this.validateUpdateLocation(eventData);
+          if (!location || !location.isValid) {
+            messages.push(location?.message ?? 'Location validation failed');
+          }
+        }
+        validatedData.location = location;
+
+        // Step 7: Process event type changes
+        let eventTypeData: any = null;
+        if (eventData.type) {
+          eventTypeData = await this.processEventTypeUpdateWithUrl(eventData, validatedData.existingEvent);
+          if (!eventTypeData || !eventTypeData.isValid) {
+            messages.push(eventTypeData?.message ?? 'Event type validation failed');
+          }
+        }
+        validatedData.eventTypeData = eventTypeData;
+
+        // Step 8: Validate categories if provided
+        if (eventData.category && eventData.category.length > 0) {
+          const categoryValidation = await this.validationService.resolveCategoriesByUrl(eventData.category);
+          if (!categoryValidation.isValid) {
+            messages.push(categoryValidation.message ?? 'Category validation failed');
+          } else {
+            validatedData.categoryData = categoryValidation;
+          }
+        }
+
+        return {
+          isValid: messages.length === 0,
+          messages,
+          validatedData: messages.length === 0 ? validatedData : undefined,
+        };
+
+      } catch (error) {
+        return {
+          isValid: false,
+          messages: [`Future edition validation error: ${error.message}`],
+        };
+      }
+    }
+
+    private async preloadFutureEditionData(
+      eventId: number,
+      startDate: string,
+      endDate: string
+    ): Promise<{
+      existingEdition: any | null;
+      maxEditionNumber: number;
+      existingEventData: Map<string, any>;
+    }> {
+      try {
+        // Check for existing future edition with same dates
+        const existingEdition = await this.prisma.event_edition.findFirst({
+          where: {
+            event: eventId,
+            start_date: new Date(startDate),
+            end_date: new Date(endDate)
+          }
+        });
+
+        // Get max edition number for new edition creation
+        const maxEdition = await this.prisma.event_edition.findFirst({
+          where: { event: eventId },
+          select: { edition_number: true },
+          orderBy: { edition_number: 'desc' }
+        });
+        const maxEditionNumber = maxEdition?.edition_number || 0;
+
+        // Pre-load existing event data if updating
+        let existingEventData = new Map();
+        if (existingEdition) {
+          existingEventData = await this.preloadExistingEventData(eventId, existingEdition.id);
+        }
+
+        return {
+          existingEdition,
+          maxEditionNumber,
+          existingEventData
+        };
+      } catch (error) {
+        console.error('Failed to preload future edition data:', error);
+        return {
+          existingEdition: null,
+          maxEditionNumber: 0,
+          existingEventData: new Map()
+        };
+      }
+    }
+
+    // Optimized method to update existing future edition
+    private async updateExistingFutureEdition(
+      existingEdition: any,
+      eventData: EventUpsertRequestDto,
+      company: any,
+      location: any,
+      userId: number,
+      tx: any
+    ): Promise<any> {
+      const updateData: any = {
+        modified: new Date(),
+        modifiedby: userId,
+      };
+
+      // Batch all updates
+      if (eventData.website) updateData.website = eventData.website;
+      if (eventData.eepProcess) updateData.eep_process = eventData.eepProcess;
+      if (location?.city) {
+        updateData.city = location.city.id;
+        if (location.city.id === 1) {
+          updateData.online_event = 1;
+        } else {
+          updateData.online_event = null;
+        }
+      }    
+      if (location?.venue) updateData.venue = location.venue.id;
+      if (location?.removeVenue) updateData.venue = null;
+      if (company) updateData.company_id = company.id;
+      
+      // Social media fields
+      if (eventData.facebookId) updateData.facebook_id = eventData.facebookId;
+      if (eventData.linkedinId) updateData.linkedin_id = eventData.linkedinId;
+      if (eventData.twitterId) updateData.twitter_id = eventData.twitterId;
+      if (eventData.twitterHashTags) updateData.twitter_hashtag = eventData.twitterHashTags;
+      if (eventData.googleId) updateData.google_id = eventData.googleId;
+      if (eventData.customFlag) {
+        updateData.custom_flag = eventData.customFlag;
+      }
+
+      await tx.event_edition.update({
+        where: { id: existingEdition.id },
+        data: updateData
+      });
+      
+      return existingEdition;
+    }
+
+    // Optimized method to create new future edition
+    private async createNewFutureEdition(
+      eventData: EventUpsertRequestDto,
+      company: any,
+      location: any,
+      maxEditionNumber: number,
+      userId: number,
+      tx: any
+    ): Promise<any> {
+      const editionNumber = maxEditionNumber + 1;
+      
+      const futureEdition = await tx.event_edition.create({
+        data: {
+          event: eventData.eventId!,
+          start_date: new Date(eventData.startDate!),
+          end_date: new Date(eventData.endDate!),
+          company_id: company?.id,
+          venue: location?.venue?.id,
+          city: location?.city?.id,
+          edition_number: editionNumber,
+          createdby: userId,
+          website: eventData.website,
+          eep_process: eventData.eepProcess || 0,
+          online_event: (location?.city?.id) === 1 ? 1 : null,
+          facebook_id: eventData.facebookId,
+          linkedin_id: eventData.linkedinId,
+          twitter_id: eventData.twitterId,
+          twitter_hashtag: eventData.twitterHashTags,
+          google_id: eventData.googleId,
+        }
+      });
+
+      return futureEdition;
+    }
+
+
+    private getFutureVenueId(location: any, eventData: EventUpsertRequestDto, futureEdition: any): number | undefined {
+      // REPLACE ENTIRE METHOD WITH:
+      
+      // 1. First check if venue was provided in request
+      if (location?.venue?.id) {
+        return location.venue.id;
+      }
+      
+      // 2. Check if venue is a number in eventData
+      if (typeof eventData.venue === 'number') {
+        return eventData.venue;
+      }
+      
+      // 3. Try to resolve venue from validation result
+      if (typeof eventData.venue === 'string') {
+        // This means venue was validated and should be in location
+        return location?.venue?.id;
+      }
+      
+      // 4. Get venue from the created future edition
+      if (futureEdition?.venue) {
+        return futureEdition.venue;
+      }
+      
+      // 5. Last resort: query the actual edition from DB
+      return undefined;
+    }
+
+    // Non-blocking post-processing for future editions
+    private async postProcessFutureEdition(
+      eventId: number,
+      editionId: number,
+      eventData: EventUpsertRequestDto
+    ): Promise<void> {
+      try {
+        // Send to RabbitMQ and Elasticsearch in background
+        await this.postProcessEvent(eventId, editionId, eventData, true);
+        
+        this.logger.log(`Post-processing completed for future edition ${editionId}`);
+      } catch (error) {
+        this.logger.warn('Post-processing failed for future edition:', error);
+      }
+    }
+
+    private async updateEvent(eventData: EventUpsertRequestDto, userId: number): Promise<EventUpsertResponseDto> {
+      try {
+        // Step 1: Perform all validations upfront 
+        const validationResult = await this.validateEventUpdateData(eventData, userId);
         if (!validationResult.isValid) {
           return createErrorResponse(validationResult.messages);
         }
 
-        // Extract validated data
-        const { existingEvent, company, location, eventTypeData, rehostAnalysis } = validationResult.validatedData!;
+        const { existingEvent, company, location, eventTypeData, rehostAnalysis, categoryData, isCurrentEdition } = validationResult.validatedData!;
 
-        // Step 2: Remove Description
-        if (eventData.remove === 'description') {
-          try {
-            await this.prisma.event_data.deleteMany({
-              where: {
-                event: eventData.id!,
-                event_edition: existingEvent.event_edition_event_event_editionToevent_edition?.id,
-                title: 'desc'
-              }
-            });
+        // Step 2: Pre-fetch all existing data we'll need (OUTSIDE transaction)
+        const existingEventData = await this.preloadExistingEventData(
+          existingEvent.id, 
+          existingEvent.event_edition_event_event_editionToevent_edition.id
+        );
 
-            return createSuccessResponse(
-              { 
-                id: eventData.id!, 
-                edition: existingEvent.event_edition_event_event_editionToevent_edition?.id 
-              },
-              'description removed successfully'
-            );
-          } catch (error) {
-            return createErrorResponse(['Failed to remove description']);
-          }
-        }
-
-        // Step 3: CORE TRANSACTION - Process update with validated data
+        // Step 3: OPTIMIZED CORE TRANSACTION - Process update with pre-loaded data
         const oldCompanyId = existingEvent.event_edition_event_event_editionToevent_edition?.company_id;
         const newCompanyId = company?.id;
         
@@ -522,88 +862,89 @@ export class EventService {
           let editionId = currentEdition?.id;
           let isNewEdition = false;
 
-          // 1. Update main event record
-          const eventUpdateData: any = {
-            modified: new Date(),
-            modifiedby: eventData.changesMadeBy,
-          };
-
-          if (eventData.name) eventUpdateData.name = eventData.name;
-          if (eventData.abbrName || eventData.eventAbbrname) {
-            eventUpdateData.abbr_name = eventData.abbrName || eventData.eventAbbrname;
-          }
-          if (eventData.punchline || eventData.eventPunchline) {
-            eventUpdateData.punchline = eventData.punchline || eventData.eventPunchline;
-          }
-          if (eventData.website || eventData.eventWebsite) {
-            eventUpdateData.website = eventData.website || eventData.eventWebsite;
-          }
-          if (eventData.frequency) eventUpdateData.frequency = eventData.frequency;
-          if (eventData.published !== undefined) eventUpdateData.published = eventData.published === 1;
-          if (eventData.status || eventData.eventStatus) {
-            eventUpdateData.status = eventData.status || eventData.eventStatus;
-          }
-          if (eventData.functionality) eventUpdateData.functionality = eventData.functionality;
-          if (eventData.multiCity !== undefined) eventUpdateData.multi_city = eventData.multiCity;
-          if (eventData.brandId) eventUpdateData.brand_id = eventData.brandId;
-
-          // Handle dates
-          if (eventData.startDate) eventUpdateData.start_date = new Date(eventData.startDate);
-          if (eventData.endDate) eventUpdateData.end_date = new Date(eventData.endDate);
-
-          // Handle location updates
-          if (location?.city) {
-            eventUpdateData.city = location.city.id;
-            eventUpdateData.country = location.country.id;
+          let targetEdition = currentEdition;
+          if (eventData.editionId && eventData.editionId !== currentEdition?.id) {
+            // Working with a specific past/future edition
+            targetEdition = await tx.event_edition.findUnique({
+              where: { id: eventData.editionId }
+            });
+            
+            if (!targetEdition) {
+              throw new Error(`Edition ${eventData.editionId} not found`);
+            }
+            
+            editionId = targetEdition.id;
+            console.log(`Working with specific edition: ${editionId} (current: ${currentEdition?.id})`);
           }
 
-          // Handle event type updates
-          if (eventTypeData) {
-            eventUpdateData.event_type = eventTypeData.eventType;
-            eventUpdateData.sub_event_type = eventTypeData.subEventType;
-            eventUpdateData.event_audience = eventTypeData.eventAudience?.toString();
-          }
+          // Handle rehost scenario (create new edition)
+          if ((rehostAnalysis.isRehost || rehostAnalysis.needsNewEdition) && isCurrentEdition) {
+            console.log('Creating new edition (rehost scenario)');
 
-          const updatedEvent = await tx.event.update({
-            where: { id: existingEvent.id },
-            data: eventUpdateData
-          });
+            if (!eventData.startDate || !eventData.endDate) {
+              throw new Error('Start date and end date are required for rehost scenario');
+            }
 
-          // 2. Handle rehost scenario or update existing edition
-          if (rehostAnalysis.isRehost || rehostAnalysis.needsNewEdition) {
+            // Calculate new edition number
+            let editionNumber = 1;
+            if (currentEdition && currentEdition.edition_number) {
+              editionNumber = currentEdition.edition_number + 1;
+            } else {
+              const maxEdition = await tx.event_edition.findFirst({
+                where: { event: existingEvent.id },
+                select: { edition_number: true },
+                orderBy: { edition_number: 'desc' }
+              });
+              
+              if (maxEdition && maxEdition.edition_number) {
+                editionNumber = maxEdition.edition_number + 1;
+              }
+            }
+            
+            // Create new edition
             const newEdition = await tx.event_edition.create({
               data: {
                 event: existingEvent.id,
+                start_date: new Date(eventData.startDate),
+                end_date: new Date(eventData.endDate),
                 city: location?.city?.id || currentEdition.city,
                 venue: location?.venue?.id || (location?.removeVenue ? null : currentEdition.venue),
-                edition_number: (currentEdition.edition_number || 0) + 1,
-                start_date: eventData.startDate ? new Date(eventData.startDate) : currentEdition.start_date,
-                end_date: eventData.endDate ? new Date(eventData.endDate) : currentEdition.end_date,
                 company_id: company?.id || currentEdition.company_id,
-                createdby: eventData.changesMadeBy,
-                website: eventData.website || eventData.eventWebsite || currentEdition.website,
+                website: eventData.website || currentEdition.website,
+                edition_number: editionNumber,
+                createdby: userId,
                 eep_process: eventData.eepProcess || 2,
-                facebook_id: eventData.facebookUrl || eventData.facebookId || currentEdition.facebook_id,
+                facebook_id: eventData.facebookId || currentEdition.facebook_id,
                 linkedin_id: eventData.linkedinId || currentEdition.linkedin_id,
                 twitter_id: eventData.twitterId || currentEdition.twitter_id,
                 twitter_hashtag: eventData.twitterHashTags || currentEdition.twitter_hashtag,
                 google_id: eventData.googleId || currentEdition.google_id,
+                visitors_total: null,
+                exhibitors_total: null,
+                area_total: null,
               }
             });
 
             // Update event to point to new edition
             await tx.event.update({
               where: { id: existingEvent.id },
-              data: { event_edition: newEdition.id }
+              data: { 
+                event_edition: newEdition.id,
+                verified: null,
+                membership: 0,
+              }
             });
 
             editionId = newEdition.id;
             isNewEdition = true;
+            currentEdition = newEdition;
           } else {
+
+            console.log(`Updating edition ${editionId}`);
             // Update existing edition
             const editionUpdateData: any = {
               modified: new Date(),
-              modifiedby: eventData.changesMadeBy,
+              modifiedby: userId,
             };
 
             if (eventData.startDate) editionUpdateData.start_date = new Date(eventData.startDate);
@@ -612,366 +953,154 @@ export class EventService {
             if (location?.city) editionUpdateData.city = location.city.id;
             if (location?.venue) editionUpdateData.venue = location.venue.id;
             if (location?.removeVenue) editionUpdateData.venue = null;
-            if (eventData.editionNumber) editionUpdateData.edition_number = eventData.editionNumber;
-            if (eventData.facebookUrl || eventData.facebookId) {
-              editionUpdateData.facebook_id = eventData.facebookUrl || eventData.facebookId;
-            }
+            if (eventData.facebookId) editionUpdateData.facebook_id = eventData.facebookId;
             if (eventData.linkedinId) editionUpdateData.linkedin_id = eventData.linkedinId;
             if (eventData.twitterId) editionUpdateData.twitter_id = eventData.twitterId;
             if (eventData.twitterHashTags) editionUpdateData.twitter_hashtag = eventData.twitterHashTags;
             if (eventData.googleId) editionUpdateData.google_id = eventData.googleId;
-            if (eventData.areaTotal) editionUpdateData.area_total = eventData.areaTotal;
-            if (eventData.website || eventData.eventWebsite) {
-              editionUpdateData.website = eventData.website || eventData.eventWebsite;
-            }
+            if (eventData.website) editionUpdateData.website = eventData.website;
 
             await tx.event_edition.update({
-              where: { id: currentEdition.id },
+              where: { id: editionId },
               data: editionUpdateData
             });
           }
 
-          // 3. Update basic event data 
-          const basicEventDataUpdates: Array<{
-            title: string;
-            data_type: string;
-            value: string | null;
-          }> = [];
-          
-          if (eventData.desc || eventData.description) {
-            basicEventDataUpdates.push({
-              title: 'desc',
-              data_type: 'TEXT',
-              value: eventData.desc || eventData.description || '',
-            });
-          }
-          if (eventData.short_desc) {
-            basicEventDataUpdates.push({
-              title: 'short_desc',
-              data_type: 'TEXT',
-              value: eventData.short_desc,
-            });
-          }
-          if (eventData.stream_url !== undefined) {
-            basicEventDataUpdates.push({
-              title: 'event_stream_url',
-              data_type: 'link',
-              value: eventData.stream_url || null,
-            });
-          }
+          // Update main event table ONLY if we're working with the current edition
+          if (isCurrentEdition || isNewEdition) {
+            console.log('Updating main event table (current edition changes)');
+            const eventUpdateData: any = {
+              modified: new Date(),
+              modifiedby: userId,
+            };
 
-          // Process basic updates in transaction
-          for (const update of basicEventDataUpdates) {
-            const existing = await tx.event_data.findFirst({
-              where: {
-                event: existingEvent.id,
-                event_edition: editionId,
-                title: update.title
-              }
-            });
+            if (eventData.name) eventUpdateData.name = eventData.name;
+            if (eventData.abbrName) eventUpdateData.abbr_name = eventData.abbrName;
+            if (eventData.punchline) eventUpdateData.punchline = eventData.punchline;
+            if (eventData.website) eventUpdateData.website = eventData.website;
+            if (eventData.frequency) eventUpdateData.frequency = eventData.frequency;
+            if (eventData.brand) eventUpdateData.brand_id = eventData.brand;
 
-            if (existing) {
-              await tx.event_data.update({
-                where: { id: existing.id },
-                data: {
-                  value: update.value,
-                  modifiedby: eventData.changesMadeBy,
-                  modified: new Date(),
-                }
-              });
-            } else {
-              await tx.event_data.create({
-                data: {
-                  event: existingEvent.id,
-                  event_edition: editionId,
-                  data_type: update.data_type,
-                  title: update.title,
-                  value: update.value,
-                  createdby: eventData.changesMadeBy,
-                }
-              });
+            if (eventData.startDate) eventUpdateData.start_date = new Date(eventData.startDate);
+            if (eventData.endDate) eventUpdateData.end_date = new Date(eventData.endDate);
+
+            if (location?.city) {
+              eventUpdateData.city = location.city.id;
+              eventUpdateData.country = location.country.id;
             }
-          }
 
-          // 4. Handle URL creation
-          if (eventData.url && eventData.functionality === 'open') {
-            await tx.url.create({
-              data: {
-                id: eventData.url,
-                createdby: eventData.changesMadeBy,
-              }
-            });
-            
+            if (eventTypeData) {
+              eventUpdateData.event_type = eventTypeData.eventType;
+              eventUpdateData.sub_event_type = eventTypeData.subEventType;
+              eventUpdateData.event_audience = eventTypeData.eventAudience?.toString();
+            }
+
             await tx.event.update({
               where: { id: existingEvent.id },
-              data: { url: eventData.url }
+              data: eventUpdateData
             });
+          }
+          else {
+            console.log('Skipping main event table update (past/future edition)');
+          }
+
+          if ((isCurrentEdition || isNewEdition) && eventTypeData?.eventTypeArray) {
+            console.log('Processing event types (current edition only)');
+            await this.updateEventTypesStandalone(
+              existingEvent.id,
+              eventTypeData.eventTypeArray,
+              userId,
+              tx
+            );
+          } else if (!isCurrentEdition && eventTypeData?.eventTypeArray) {
+            console.log('Skipping event type update (past/future edition)');
+          }
+
+          //  Bulk process all event_data updates in single operations
+          await this.updateEventData(existingEvent.id, editionId, eventData, userId, existingEventData, tx);
+
+          //  Bulk process all other operations
+          const bulkOperations: Promise<any>[] = [];
+
+          // Process sales data
+          if (eventData.salesAction || eventData.salesActionBy || eventData.salesStatus || eventData.salesRemark) {
+            bulkOperations.push(this.processSalesData(eventData, editionId, userId, tx));
+          }
+
+          // Process contacts
+          if (eventData.contact) {
+            bulkOperations.push(this.processContacts(existingEvent.id, eventData.contact, userId));
+          }
+
+          // Process stats
+          if (eventData.stats) {
+            bulkOperations.push(this.processStats(existingEvent.id, editionId, eventData.stats, userId, tx));
+          }
+
+          // Process products and categories together
+          if (eventData.product || eventData.category) {
+            bulkOperations.push(this.processProductsAndCategories(
+              existingEvent.id, editionId, eventData, categoryData, userId, tx
+            ));
+          }
+
+          // Process event settings
+          if (eventData.eventSettings) {
+            bulkOperations.push(this.processEventSettings(existingEvent.id, eventData.eventSettings, userId, tx));
+          }
+
+          if (eventData.subVenue && typeof eventData.subVenue === 'string') {
+            bulkOperations.push(this.processSubVenues(existingEvent.id, editionId, eventData, userId, tx));
+          }
+
+
+          // Execute all bulk operations in parallel 
+          if (bulkOperations.length > 0) {
+            await Promise.all(bulkOperations);
           }
 
           return { 
-            updatedEvent, 
+            updatedEvent: existingEvent, 
             editionId, 
             isNewEdition,
-            oldEditionId: currentEdition?.id 
+            isCurrentEdition,
+            rehostScenario: rehostAnalysis.scenario
           };
         }, {
-          maxWait: 5000,
-          timeout: 10000,
+          maxWait: 15000,   
+          timeout: 20000,  
         });
 
         console.log('Core transaction completed successfully');
 
-        // Handle Firebase session cloning if company changed
-        if (oldCompanyId !== newCompanyId) {
-          await this.handleFirebaseSessionCloning(
-            existingEvent.id,
-            oldCompanyId,
-            newCompanyId
-          );
-        }
-
-        // Step 4: POST-TRANSACTION OPERATIONS
-        const { editionId, isNewEdition, oldEditionId } = coreResult;
+        // if (oldCompanyId !== newCompanyId) {
+        //   setImmediate(() => {
+        //     this.handleFirebaseSessionCloning(existingEvent.id, oldCompanyId, newCompanyId);
+        //   });
+        // }
 
         // Copy event data for rehost
-        if (isNewEdition && oldEditionId) {
-          await this.copyEventDataToNewEdition(
-            existingEvent.id, 
-            oldEditionId, 
-            editionId, 
-            eventData.changesMadeBy
-          );
-
-          await this.handleRehostElasticsearch(
-            existingEvent.id,
-            oldEditionId,
-            editionId
-          );
-          console.log('Event data copied to new edition');
-        }
-
-        // Process stats
-        if (eventData.stats || eventData.eventExhibitors !== undefined || 
-            eventData.eventVisitors !== undefined || eventData.event_exhibitors !== undefined || 
-            eventData.event_visitors !== undefined) {
-          try {
-            await this.commonService.processEventStats(
-              existingEvent.id,
-              editionId,
-              eventData,
-              eventData.changesMadeBy
+        if (coreResult.isNewEdition) {
+          setImmediate(() => {
+            this.copyEventDataToNewEdition(
+              existingEvent.id, 
+              existingEvent.event_edition_event_event_editionToevent_edition.id,
+              coreResult.editionId, 
+              userId
             );
-            console.log('Stats processing completed');
-          } catch (error) {
-            console.error('Stats processing failed:', error);
-          }
-        }
-
-        // Process products and categories
-        if (eventData.product || eventData.eventProducts) {
-          try {
-            const productData = eventData.product || eventData.eventProducts;
-            if (productData) {
-              const productResult = await this.commonService.processEventProducts(
-                existingEvent.id,
-                editionId,
-                productData,
-                eventData.changesMadeBy
-              );
-            
-              // Handle categories from products
-              if (eventData.category) {
-                const allCategories = [...eventData.category, ...productResult.categoryIds];
-                await this.commonService.processEventCategories(
-                  existingEvent.id,
-                  allCategories,
-                  eventData.changesMadeBy
-                );
-              } else if (productResult.categoryIds.length > 0) {
-                await this.commonService.saveProductCategories(
-                  existingEvent.id,
-                  productResult.categoryIds,
-                  eventData.changesMadeBy
-                );
-              }
-            }
-            console.log('Product processing completed');
-          } catch (error) {
-            console.error('Product processing failed:', error);
-          }
-        }
-
-        // Update event categories (if not handled by products)
-        if (eventData.category && (!eventData.product && !eventData.eventProducts)) {
-          try {
-            await this.updateEventCategoriesStandalone(existingEvent.id, eventData.category, eventData.changesMadeBy);
-            console.log('Categories updated');
-          } catch (error) {
-            console.error('Category update failed:', error);
-          }
-        }
-
-        // Update event types
-        if (eventTypeData) {
-          try {
-            await this.updateEventTypesStandalone(existingEvent.id, eventTypeData.eventTypeArray, eventData.changesMadeBy);
-            console.log('Event types updated');
-          } catch (error) {
-            console.error('Event type update failed:', error);
-          }
-        }
-
-        // Process complex event data
-        if (eventData.timing || eventData.eventHighlights) {
-          try {
-            await this.updateComplexEventData(existingEvent.id, editionId, eventData);
-            console.log('Complex event data updated');
-          } catch (error) {
-            console.error('Complex event data update failed:', error);
-          }
-        }
-
-        // Process attachments (file operations)
-        try {
-          await this.processAttachments(existingEvent.id, editionId, eventData);
-          console.log('Attachments processed');
-        } catch (error) {
-          console.error('Attachment processing failed:', error);
-        }
-
-        // Process contacts 
-        if (eventData.contactAdd) {
-          try {
-            await this.commonService.addEventContacts(
-              existingEvent.id,
-              eventData.contactAdd,
-              eventData.changesMadeBy
-            );
-            console.log('Contacts added');
-          } catch (error) {
-            console.error('Contact addition failed:', error);
-          }
-        }
-
-        if (eventData.contactDelete) {
-          try {
-            await this.commonService.deleteEventContacts(
-              existingEvent.id,
-              eventData.contactDelete,
-              eventData.changesMadeBy
-            );
-            console.log('Contacts deleted');
-          } catch (error) {
-            console.error('Contact deletion failed:', error);
-          }
-        }
-
-        // Process sub-venues
-        if (eventData.subVenue && (eventData.venue || eventData.venueId)) {
-          try {
-            const venueIdValue = eventData.venue || eventData.venueId;
-            if (venueIdValue) {
-              const venueId = typeof venueIdValue === 'string' ? parseInt(venueIdValue) : venueIdValue;
-              
-              const subVenueResult = await this.commonService.processSubVenues(
-                existingEvent.id,
-                editionId,
-                eventData.subVenue,
-                venueId,
-                eventData.changesMadeBy
-              );
-
-              if (!subVenueResult.valid) {
-                console.warn('Sub-venue processing failed:', subVenueResult.message);
-              } else {
-                console.log('Sub-venues processed');
-              }
-            }
-          } catch (error) {
-            console.error('Sub-venue processing failed:', error);
-          }
-        }
-
-        // Create shareable URL if needed
-        let shareableUrl: string | null = null;
-        if (eventData.createUrl === 1 || eventData.fromDashboard === 1) {
-          try {
-            shareableUrl = await this.commonService.createShareableUrl(
-              existingEvent.id,
-              eventData.changesMadeBy
-            );
-            console.log('Shareable URL created');
-          } catch (error) {
-            console.error('Shareable URL creation failed:', error);
-          }
-        }
-
-        // Step 5: CREATE REVIEW TRACKING
-        let reviewResult: { preReviewId?: number; postReviewId?: number } = {};
-        
-        try {
-          // Get existing data before update
-          const existingData = await this.getExistingEventData(existingEvent.id, existingEvent.event_edition);
-          
-          // Create PreReview with EXISTING data
-          const preReviewData = createEventReviewData(
-            existingEvent.id,
-            existingEvent.name,
-            eventData.changesMadeBy,
-            {
-              description: existingData.currentDescription ?? undefined,
-              startDate: existingEvent.start_date?.toISOString().split('T')[0],
-              endDate: existingEvent.end_date?.toISOString().split('T')[0],
-              functionality: existingEvent.functionality,
-              website: existingEvent.website,
-              eventAudience: existingEvent.event_audience,
-              bypassQC: true,
-            }
-          );
-
-          const preReviewId = await this.unifiedReviewService.createPreReview(preReviewData);
-          reviewResult.preReviewId = preReviewId;
-
-          // Create PostReview with NEW data
-          const postReviewData = createEventReviewData(
-            existingEvent.id,
-            existingEvent.name,
-            eventData.changesMadeBy,
-            {
-              description: eventData.desc || eventData.description,
-              startDate: eventData.startDate,
-              endDate: eventData.endDate,
-              functionality: eventData.functionality,
-              website: eventData.website || eventData.eventWebsite,
-              eventAudience: eventData.eventAudience,
-              bypassQC: true,
-            }
-          );
-
-          const postReviewId = await this.unifiedReviewService.createPostReview({
-            ...postReviewData,
-            preReviewId: preReviewId,
-            oldData: preReviewData.content,
-            newData: postReviewData.content,
-            apiPayload: eventData,
           });
-          
-          reviewResult.postReviewId = postReviewId;
-          
-          this.logger.log(`Created reviews - Pre: ${reviewResult.preReviewId}, Post: ${reviewResult.postReviewId}`);
-        } catch (reviewError) {
-          this.logger.error('Review creation failed:', reviewError);
         }
 
-        console.log('All processing completed successfully');
+
+        // Post-processing operations
+        setImmediate(() => {
+          this.postProcessEvent(existingEvent.id, coreResult.editionId, eventData, true);
+        });
 
         return createSuccessResponse(
           {
-            id: existingEvent.id,
-            edition: editionId,
-            shareableUrl: shareableUrl,
-            pre_review: reviewResult.preReviewId,
-            post_review: reviewResult.postReviewId,
+            eventId: existingEvent.id,
+            editionId: coreResult.editionId,
           },
           'updated'
         );
@@ -982,7 +1111,348 @@ export class EventService {
       }
     }
 
-    private async validateEventUpdateData(eventData: EventUpsertRequestDto): Promise<{
+    private async preloadExistingEventData(eventId: number, editionId: number): Promise<Map<string, any>> {
+      const existingEventData = await this.prisma.event_data.findMany({
+        where: {
+          event: eventId,
+          event_edition: editionId,
+          title: {
+            in: ['timing', 'desc', 'short_desc', 'event_highlights', 'stats', 'event_documents', 'brochure', 'event_og_image', 'customization']
+          }
+        }
+      });
+
+      // Create a map for faster lookups
+      const dataMap = new Map();
+      existingEventData.forEach(data => {
+        dataMap.set(data.title, data);
+      });
+
+      return dataMap;
+    }
+
+
+    private async updateEventData(
+      eventId: number,
+      editionId: number,
+      eventData: EventUpsertRequestDto,
+      userId: number,
+      existingDataMap: Map<string, any>,
+      tx: any
+    ) {
+      const updates: Array<{
+        title: string;
+        data_type: string;
+        value: string;
+      }> = [];
+
+      if (eventData.timing) {
+        updates.push({
+          title: 'timing',
+          data_type: 'JSON',
+          value: typeof eventData.timing === 'string' ? eventData.timing : JSON.stringify(eventData.timing),
+        });
+      }
+
+      if (eventData.highlights) {
+        updates.push({
+          title: 'event_highlights',
+          data_type: 'JSON',
+          value: eventData.highlights,
+        });
+      }
+
+      if (eventData.description) {
+        updates.push({
+          title: 'desc',
+          data_type: 'TEXT',
+          value: eventData.description,
+        });
+      }
+
+      if (eventData.shortDesc) {
+        updates.push({
+          title: 'short_desc',
+          data_type: 'TEXT',
+          value: eventData.shortDesc,
+        });
+      }
+
+      if (eventData.brochure) {
+        updates.push({
+          title: 'brochure',
+          data_type: 'ATTACHMENT',
+          value: eventData.brochure.toString(),
+        });
+      }
+
+      if (eventData.ogImage) {
+        updates.push({
+          title: 'event_og_image',
+          data_type: 'ATTACHMENT',
+          value: eventData.ogImage.toString(),
+        });
+      }
+
+      // if (eventData.stats) {
+      //   console.log('Processing stats:', eventData.stats);
+      //   updates.push({
+      //     title: 'stats',
+      //     data_type: 'JSON',
+      //     value: typeof eventData.stats === 'string' ? eventData.stats : JSON.stringify(eventData.stats),
+      //   });
+      // }
+
+      const operations: Promise<any>[] = [];
+
+      for (const update of updates) {
+        operations.push(
+          tx.event_data.upsert({
+            where: {
+              event_event_edition_title: {
+                event: eventId,
+                event_edition: editionId,
+                title: update.title
+              }
+            },
+            update: {
+              value: update.value,
+              modifiedby: userId,
+              modified: new Date(),
+            },
+            create: {
+              event: eventId,
+              event_edition: editionId,
+              data_type: update.data_type,
+              title: update.title,
+              value: update.value,
+              createdby: userId,
+              created: new Date(),
+            }
+          })
+        );
+      }
+
+      if (operations.length > 0) {
+        await Promise.all(operations);
+      }
+    }
+
+    private async processContacts(eventId: number, contactsData: string, userId: number): Promise<void> {
+      // Move contact processing outside of main transaction
+      setImmediate(async () => {
+        try {
+          const contacts = JSON.parse(contactsData);
+          const validation = await this.commonService.validateContactEmails(contacts);
+          
+          if (!validation.valid) {
+            this.logger.warn(`Contact validation failed: ${validation.message}`);
+            return;
+          }
+
+          await this.commonService.addEventContacts(eventId, contactsData, userId);
+        } catch (error) {
+          this.logger.error('Bulk contact processing failed:', error);
+        }
+      });
+    }
+
+    private async processStats(
+      eventId: number,
+      editionId: number,
+      statsData: any,
+      userId: number,
+      tx: any
+    ): Promise<{ valid: boolean; message?: string }> {
+      try {
+        return await this.commonService.processEventStats(eventId, editionId, statsData, userId, tx);
+      } catch (error) {
+        this.logger.warn(`Stats processing failed: ${error.message}`);
+        return { valid: false };
+      }
+    }
+
+    private async processProductsAndCategories(
+      eventId: number,
+      editionId: number,
+      eventData: EventUpsertRequestDto,
+      categoryData: any,
+      userId: number,
+      tx: any
+    ): Promise<void> {
+      let productCategoryIds: number[] = [];
+
+      // Process products first
+      if (eventData.product) {
+        try {
+          const productResult = await this.commonService.processEventProducts(
+            eventId,
+            editionId,
+            eventData.product,
+            userId,
+            tx
+          );
+          productCategoryIds = productResult.categoryIds;
+        } catch (error) {
+          this.logger.error('Product processing failed:', error);
+          throw new Error(`Product processing failed: ${error.message}`);
+        }
+      }
+
+      // Process categories (merge user categories with product categories)
+      if (eventData.category || productCategoryIds.length > 0) {
+        const userCategoryIds = categoryData?.categoryIds || [];
+        const allCategories = [...userCategoryIds, ...productCategoryIds];
+        const uniqueCategories = [...new Set(allCategories)];
+        
+        await this.commonService.processEventCategories(
+          eventId,
+          uniqueCategories,
+          userId,
+          undefined,
+          undefined,
+          tx
+        );
+      }
+    }
+
+    private isCurrentEdition(eventData: EventUpsertRequestDto, existingEvent: any): boolean {
+      const currentEditionId = existingEvent.event_edition_event_event_editionToevent_edition?.id;
+      
+      // If editionId is specified in payload, check if it matches current
+      if (eventData.editionId) {
+        const isCurrentEdition = eventData.editionId === currentEditionId;
+        console.log(`Edition Context: Specified edition ${eventData.editionId} ${isCurrentEdition ? '==' : '!='} current (${currentEditionId})`);
+        return isCurrentEdition;
+      }
+      
+      // If no editionId specified = working with current edition
+      console.log('No edition specified = working with current edition');
+      return true;
+    }
+
+    validateDates(startDate: string, endDate: string, eventAudience?: string, isPastEdition?: boolean): {
+      isValid: boolean;
+      message?: string;
+    } {
+      const dateLogicResult = this.validationService.validateDates(startDate, endDate, eventAudience);
+      
+      // Allow past dates if updating past edition
+      if (isPastEdition) {
+        // Only check that end date is after start date
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        if (end < start && eventAudience !== '10100') {
+          return {
+            isValid: false,
+            message: 'startDate should be less than endDate',
+          };
+        }
+        
+        return { isValid: true };
+      }
+      
+      return dateLogicResult;
+    }
+
+    private async copyEventDataToNewEdition(
+      eventId: number, 
+      oldEditionId: number, 
+      newEditionId: number, 
+      userId: number
+    ) {
+      try {
+        console.log(`Copying data from edition ${oldEditionId} to ${newEditionId}`);
+        
+        // Copy event_data 
+        const existingEventData = await this.prisma.event_data.findMany({
+          where: {
+            event: eventId,
+            event_edition: oldEditionId,
+            title: { 
+              not: 'event_media' // Don't copy media for rehost
+            }
+          }
+        });
+
+        if (existingEventData.length > 0) {
+          const newEventData = existingEventData.map(data => ({
+            event: eventId,
+            event_edition: newEditionId,
+            data_type: data.data_type,
+            title: data.title,
+            value: data.value,
+            published: data.published,
+            createdby: userId,
+            created: new Date(),
+          }));
+
+          await this.prisma.event_data.createMany({
+            data: newEventData,
+            skipDuplicates: true, // Prevent conflicts
+          });
+          
+          console.log(`Copied ${newEventData.length} event_data records`);
+        }
+
+        // Copy event_products
+        const existingProducts = await this.prisma.event_products.findMany({
+          where: { 
+            event: eventId, 
+            edition: oldEditionId 
+          }
+        });
+
+        if (existingProducts.length > 0) {
+          const newProducts = existingProducts.map(product => ({
+            event: eventId,
+            edition: newEditionId,
+            product: product.product,
+            published: product.published,
+            createdby: userId,
+            created: new Date(),
+          }));
+
+          await this.prisma.event_products.createMany({
+            data: newProducts,
+            skipDuplicates: true,
+          });
+          
+          console.log(`Copied ${newProducts.length} event_products records`);
+        }
+
+        const introBlockData = await this.prisma.event_data.findFirst({
+          where: {
+            event: eventId,
+            event_edition: oldEditionId,
+            title: 'intro_block'
+          }
+        });
+
+        if (introBlockData) {
+          await this.prisma.event_data.create({
+            data: {
+              event: eventId,
+              event_edition: newEditionId,
+              data_type: introBlockData.data_type,
+              title: 'intro_block',
+              value: introBlockData.value,
+              published: introBlockData.published,
+              createdby: userId,
+            }
+          });
+          console.log('Copied intro_block setting');
+        }
+
+      } catch (error) {
+        console.error('Failed to copy event data:', error);
+        throw error;
+      }
+    }
+
+
+    private async validateEventUpdateData(eventData: EventUpsertRequestDto, userId: number): Promise<{
       isValid: boolean;
       messages: string[];
       validatedData?: {
@@ -992,6 +1462,9 @@ export class EventService {
         eventTypeData: any;
         rehostAnalysis: any;
         contactValidation?: any;
+        categoryData?: any;
+        salesValidation?: any;
+        isCurrentEdition: boolean;
       };
     }> {
       const messages: string[] = [];
@@ -999,16 +1472,16 @@ export class EventService {
 
       try {
         // Step 1: Validate user
-        const userValidation = await this.validationService.validateUser(eventData.changesMadeBy);
+        const userValidation = await this.validationService.validateUser(userId);
         if (!userValidation.isValid) {
           messages.push(userValidation.message ?? 'User validation failed');
         }
 
         // Step 2: Validate event exists and ID
-        if (typeof eventData.id !== 'number') {
+        if (typeof eventData.eventId !== 'number') {
           messages.push('Event id is required for update');
         } else {
-          const eventValidation = await this.validationService.validateEventExists(eventData.id);
+          const eventValidation = await this.validationService.validateEventExists(eventData.eventId);
           if (!eventValidation.isValid) {
             messages.push(eventValidation.message ?? 'Event validation failed');
           } else {
@@ -1023,84 +1496,94 @@ export class EventService {
 
         const existingEvent = validatedData.existingEvent;
 
-        // Step 3: Check user permissions
-        if (eventData.fromDashboard === 1 && eventData.changesMadeBy !== existingEvent.createdby) {
-          messages.push('Not authorized to change the event details');
-        }
-
-        // Step 4: Validate contact operations
-        if (eventData.contactAdd) {
-          try {
-            const contacts = JSON.parse(eventData.contactAdd);
-            const contactValidation = await this.commonService.validateContactEmails(
-              contacts,
-              eventData.restrictionLevel || 'vendor'
-            );
-            if (!contactValidation.valid) {
-              messages.push(contactValidation.message!);
-            } else {
-              validatedData.contactValidation = contactValidation;
+        // Step 3: Validate edition access if edition specified
+        if (eventData.editionId) {
+          const editionExists = await this.prisma.event_edition.findFirst({
+            where: {
+              id: eventData.editionId,
+              event: eventData.eventId
             }
-          } catch (parseError) {
-            messages.push('Invalid contact data format');
+          });
+
+          if (!editionExists) {
+            messages.push('Invalid edition ID for this event');
           }
         }
 
-        // Step 5: Determine rehost scenario
+        // Step 4: Check user permissions
+        const authValidation = await this.validationService.validateUserAuthorization(
+          userId,
+          eventData.eventId!
+        );
+
+        if (!authValidation.isValid) {
+          messages.push(authValidation.message ?? 'Not authorized to change the event details');
+        } else {
+          this.logger.log(
+            `User ${userId} authorized for event ${eventData.eventId} via ${authValidation.authType}`
+          );
+        }
+
+        // Step 5: Determine if working with current edition
+        const isCurrentEdition = this.isCurrentEdition(eventData, existingEvent);
+        validatedData.isCurrentEdition = isCurrentEdition;
+
+        // Step 6: Analyze rehost scenario
         validatedData.rehostAnalysis = this.analyzeRehostScenario(eventData, existingEvent);
 
-        // Step 6: Validate dates if provided
+        // Step 7: Validate dates if provided
         if (eventData.startDate && eventData.endDate) {
-          const dateValidation = this.validationService.validateDates(
+          const isPastEdition = !isCurrentEdition;
+          
+          const dateValidation = this.validateDates(
             eventData.startDate,
             eventData.endDate,
-            eventData.eventAudience || existingEvent.event_audience
+            existingEvent.event_audience,
+            isPastEdition
           );
+          
           if (!dateValidation.isValid) {
             messages.push(dateValidation.message ?? 'Date validation failed');
           }
 
-          // Check for date conflicts
-          const conflictValidation = await this.validationService.validateDateConflicts(
-            eventData.id!,
-            eventData.startDate,
-            eventData.endDate,
-            validatedData.rehostAnalysis.isRehost ? undefined : existingEvent.event_edition
-          );
-          if (!conflictValidation.isValid) {
-            messages.push(conflictValidation.message ?? 'Date conflict validation failed');
+          // Only check for date conflicts with current edition updates
+          if (isCurrentEdition) {
+            const excludeEditionId = validatedData.rehostAnalysis.isRehost ? undefined : existingEvent.event_edition;
+            const conflictValidation = await this.validationService.validateDateConflicts(
+              eventData.eventId!,
+              eventData.startDate,
+              eventData.endDate,
+              excludeEditionId
+            );
+            if (!conflictValidation.isValid) {
+              messages.push(conflictValidation.message ?? 'Date conflict validation failed');
+            }
           }
         }
 
-        // Step 7: Validate website format if provided
-        if (eventData.website || eventData.eventWebsite) {
-          const website = eventData.website || eventData.eventWebsite;
+        // Step 8: Validate website format if provided
+        if (eventData.website) {
+          const website = eventData.website;
           if (!this.validationService.validateWebsiteFormat(website ?? '')) {
             messages.push('website is not in correct format');
           }
         }
 
-        // Step 8: Validate company if provided
+        // Step 9: Validate company if provided
         let company = null;
-        if (eventData.company || eventData.companyId) {
-          const companyId = eventData.company || eventData.companyId;
-          const numericCompanyId = typeof companyId === 'string' ? parseInt(companyId) : companyId;
-          if (numericCompanyId === undefined) {
-            messages.push('Company ID is required');
+        if (eventData.company) {
+          const companyValidation = await this.validationService.validateCompany(eventData.company);
+          if (!companyValidation.isValid) {
+            messages.push(companyValidation.message ?? 'Company validation failed');
           } else {
-            const companyValidation = await this.validationService.validateCompany(numericCompanyId);
-            if (!companyValidation.isValid) {
-              messages.push(companyValidation.message ?? 'Company validation failed');
-            } else {
-              company = companyValidation.company;
-            }
+            company = companyValidation.company;
           }
         }
         validatedData.company = company;
 
-        // Step 9: Validate location if provided
+        // Step 10: Validate location if provided
         let location: any = null;
-        if (eventData.venue || eventData.venueId || eventData.city) {
+        if (eventData.venue || eventData.city) {
           location = await this.validateUpdateLocation(eventData);
           if (!location || !location.isValid) {
             messages.push(location?.message ?? 'Location validation failed');
@@ -1108,29 +1591,50 @@ export class EventService {
         }
         validatedData.location = location;
 
-        // Step 10: Process event type changes
+        // Step 11: Process event type changes
         let eventTypeData: any = null;
-        if (eventData.type || eventData.eventType || eventData.typeVal || eventData.type_val) {
-          eventTypeData = await this.processEventTypeUpdate(eventData, existingEvent);
+        if (eventData.type) {
+          eventTypeData = await this.processEventTypeUpdateWithUrl(eventData, existingEvent);
           if (!eventTypeData || !eventTypeData.isValid) {
             messages.push(eventTypeData?.message ?? 'Event type validation failed');
           }
         }
         validatedData.eventTypeData = eventTypeData;
 
-        // Step 11: Validate categories if provided
-        if (eventData.category) {
-          const categoryValidation = await this.validationService.validateCategories(eventData.category);
+        // Step 12: Validate categories if provided
+        if (eventData.category && eventData.category.length > 0) {
+          const categoryValidation = await this.validationService.resolveCategoriesByUrl(eventData.category);
           if (!categoryValidation.isValid) {
             messages.push(categoryValidation.message ?? 'Category validation failed');
+          } else {
+            validatedData.categoryData = categoryValidation;
           }
         }
 
-        // Step 12: Validate URL if functionality is being changed to open
-        if (eventData.functionality === 'open' || eventData.url) {
-          const urlValidation = await this.validateUrlForFunctionality(eventData, existingEvent);
-          if (!urlValidation.isValid) {
-            messages.push(urlValidation.message ?? 'URL validation failed');
+        // Step 13: Validate sales data if provided
+        if (eventData.salesAction || eventData.salesActionBy || eventData.salesStatus || eventData.salesRemark) {
+          if (eventData.salesAction) {
+            const actionValidation = this.validationService.validateSalesAction(eventData.salesAction);
+            if (!actionValidation.isValid) {
+              messages.push(actionValidation.message!);
+            }
+
+            if (!eventData.salesActionBy) {
+              messages.push('salesActionBy is required when salesAction is provided');
+            } else {
+              const userValidation = await this.validationService.validateSalesActionBy(eventData.salesActionBy);
+              if (!userValidation.isValid) {
+                messages.push(userValidation.message!);
+              } else {
+                validatedData.salesValidation = {
+                  actionValid: true,
+                  userValid: true,
+                  user: userValidation.user,
+                };
+              }
+            }
+          } else if (eventData.salesActionBy) {
+            messages.push('salesAction is required when salesActionBy is provided');
           }
         }
 
@@ -1147,30 +1651,40 @@ export class EventService {
         };
       }
     }
-  
+
     private analyzeRehostScenario(eventData: EventUpsertRequestDto, existingEvent: any) {
       const now = new Date();
       const currentEdition = existingEvent.event_edition_event_event_editionToevent_edition;
       
-      // Check if current edition has ended and new dates are provided
-      const isRehost = currentEdition && 
-                       currentEdition.end_date < now && 
-                       eventData.startDate && 
-                       eventData.endDate && 
-                       new Date(eventData.startDate) > currentEdition.end_date;
-  
-      // Check if it's a date update on current edition
-      const isDateUpdate = eventData.startDate && 
-                           eventData.endDate && 
-                           currentEdition &&
-                           (currentEdition.start_date.toISOString().split('T')[0] === eventData.startDate &&
-                            currentEdition.end_date.toISOString().split('T')[0] === eventData.endDate);
-  
+      console.log('REHOST ANALYSIS:');
+      console.log('- Current Edition End:', currentEdition?.end_date);
+      console.log('- Current Time:', now);
+      console.log('- New Start Date:', eventData.startDate);
+      console.log('- New End Date:', eventData.endDate);
+      
+      // Must have both current edition and new dates to analyze
+      if (!currentEdition?.end_date || !eventData.startDate || !eventData.endDate) {
+        console.log(' Missing data for rehost analysis');
+        return { isRehost: false, scenario: 'no_date_change' };
+      }
+
+      const currentEditionEnded = new Date(currentEdition.end_date) < now;
+      const newStartDate = new Date(eventData.startDate);
+      const currentEndDate = new Date(currentEdition.end_date);
+      const newStartAfterCurrentEnd = newStartDate > currentEndDate;
+      
+      console.log('- Current Edition Ended:', currentEditionEnded);
+      console.log('- New Start > Current End:', newStartAfterCurrentEnd);
+      
+      // LEGACY LOGIC: rehost only if edition ended AND new dates are after current end
+      const isRehost = currentEditionEnded && newStartAfterCurrentEnd;
+      
+      console.log('IS REHOST:', isRehost);
+      
       return {
         isRehost,
-        isDateUpdate,
         needsNewEdition: isRehost,
-        currentEdition
+        scenario: isRehost ? 'rehost' : 'regular_update'
       };
     }
 
@@ -1197,708 +1711,226 @@ export class EventService {
       };
     }
   
-    private async validateUpdateLocation(eventData: EventUpsertRequestDto) {
-      if (eventData.venue === "0" || eventData.venueId === "0") {
-        // Remove venue, keep city
-        return { valid: true, removeVenue: true };
-      }
-  
-      const venueId = eventData.venue || eventData.venueId;
-      if (venueId && venueId !== "0") {
-        const venueValidation = await this.validationService.validateVenue(
-          typeof venueId === 'string' ? parseInt(venueId) : venueId
-        );
+
+  private async validateUpdateLocation(eventData: EventUpsertRequestDto) {
+    if (eventData.venue === "0") {
+      return { isValid: true, removeVenue: true };
+    }
+
+    const venueId = eventData.venue;
+    if (venueId && venueId !== "0") {
+      if (typeof venueId === 'string') {
+        // Handle URL-based venue resolution
+        const venueValidation = await this.validationService.resolveVenueByUrl(venueId);
+        if (!venueValidation.isValid) {
+          return {
+            isValid: false,
+            message: venueValidation.message,
+          };
+        }
+        
+        const venue = venueValidation.venue;
+        
+        // Based on your schema, venue has direct relationships to both city and country
+        let city = venue.city_venue_cityTocity;
+        let country = venue.country_venue_countryTocountry;
+        
+        // If country is not loaded via venue, try to get it from city
+        if (!country && city && city.country_city_countryTocountry) {
+          country = city.country_city_countryTocountry;
+        }
+        
+        // Fallback: if still no country, fetch it directly
+        if (!country) {
+          if (venue.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: venue.country }
+            });
+          } else if (city && city.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: city.country }
+            });
+          }
+        }
+        
+        if (!city || !country) {
+          return {
+            isValid: false,
+            message: 'Unable to resolve city or country for the venue'
+          };
+        }
+        
+        return {
+          isValid: true,
+          venue: venue,
+          city: city,
+          country: country
+        };
+      } else {
+        // Handle numeric venue ID
+        const numericVenueId = typeof venueId === 'string' ? parseInt(venueId) : venueId;
+        const venueValidation = await this.validationService.validateVenue(numericVenueId);
         if (!venueValidation.isValid) {
           return venueValidation;
         }
         
-        return {
-          valid: true,
-          venue: venueValidation.venue,
-          city: venueValidation.venue.city_venue_cityTocity,
-          country: venueValidation.venue.city_venue_cityTocity.country
-        };
-      }
-  
-      if (eventData.city) {
-        const cityId = typeof eventData.city === 'string' ? parseInt(eventData.city) : eventData.city;
-        const cityValidation = await this.validationService.validateCity(cityId);
-        if (!cityValidation.isValid) {
-          return cityValidation;
+        const venue = venueValidation.venue;
+        let city = venue.city_venue_cityTocity;
+        let country = venue.country_venue_countryTocountry;
+        
+        // If country is not loaded via venue, try to get it from city
+        if (!country && city && city.country_city_countryTocountry) {
+          country = city.country_city_countryTocountry;
+        }
+        
+        // Fallback: if still no country, fetch it directly
+        if (!country) {
+          if (venue.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: venue.country }
+            });
+          } else if (city && city.country) {
+            country = await this.prisma.country.findUnique({
+              where: { id: city.country }
+            });
+          }
+        }
+        
+        if (!city || !country) {
+          return {
+            isValid: false,
+            message: 'Unable to resolve city or country for the venue'
+          };
         }
         
         return {
-          valid: true,
-          city: cityValidation.city,
-          country: cityValidation.city.country
+          isValid: true,
+          venue: venue,
+          city: city,
+          country: country
         };
       }
-  
-      return { valid: true };
     }
-  
-    private async processEventTypeUpdate(eventData: EventUpsertRequestDto, existingEvent: any): Promise<{
+
+    // Handle city-only resolution
+    if (eventData.city) {
+      if (typeof eventData.city === 'string') {
+        const cityResult = await this.validationService.resolveCityByUrl(eventData.city);
+        if (!cityResult.isValid) {
+          return {
+            isValid: false,
+            message: cityResult.message,
+          };
+        }
+        
+        const city = cityResult.city;
+        let country = city.country_city_countryTocountry;
+        
+        // Fallback if country relationship not loaded
+        if (!country && city.country) {
+          country = await this.prisma.country.findUnique({
+            where: { id: city.country }
+          });
+        }
+        
+        if (!country) {
+          return {
+            isValid: false,
+            message: 'Unable to resolve country for the city'
+          };
+        }
+        
+        return {
+          isValid: true,
+          city: city,
+          country: country
+        };
+      } else {
+        const cityId = typeof eventData.city === 'string' ? parseInt(eventData.city) : eventData.city;
+        const cityValidation = await this.validationService.validateCity(cityId);
+        if (!cityValidation.isValid) {
+          return {
+            isValid: false,
+            message: cityValidation.message,
+          };
+        }
+        
+        const city = cityValidation.city;
+        let country = city.country_city_countryTocountry;
+        
+        // Fallback if country relationship not loaded
+        if (!country && city.country) {
+          country = await this.prisma.country.findUnique({
+            where: { id: city.country }
+          });
+        }
+        
+        return {
+          isValid: true,
+          city: city,
+          country: country
+        };
+      }
+    }
+
+    return { isValid: true };
+  }
+
+    private async processEventTypeUpdateWithUrl(eventData: EventUpsertRequestDto, existingEvent: any): Promise<{
       isValid: boolean;
       message?: string;
       eventType?: number;
       subEventType?: number | null;
       eventTypeArray?: number[];
       eventAudience?: string;
-      }> {
-        // Check if user is trying to change from/to business floor (not allowed)
-        if (eventData.type) {
+    }> {
+      try {
+        // Check if user is trying to change from/to business floor 
+        const eventTypeInput = eventData.type;
+        if (eventTypeInput && Array.isArray(eventTypeInput)) {
           const isCurrentlyBusinessFloor = existingEvent.event_type === 10;
-          const isNewBusinessFloor = eventData.type === 'business floor';
+          
+          // Resolve the new event type URLs to get their IDs
+          const urlResult = await this.validationService.validateEventTypesWithUrl(eventTypeInput);
+          if (!urlResult.isValid) {
+            return { isValid: false, message: urlResult.message };
+          }
+          
+          const newEventTypeIds = urlResult.eventTypeArray || [];
+          const isNewBusinessFloor = newEventTypeIds.includes(10);
           
           if ((isCurrentlyBusinessFloor && !isNewBusinessFloor) || 
               (!isCurrentlyBusinessFloor && isNewBusinessFloor)) {
             return { isValid: false, message: 'you can not change the event type' };
           }
         }
-  
-        // Process new event type
-        let eventType: number | undefined;
-        let subEventType: number | null = null;
-        let eventTypeArray: number[] = [];
-  
-        if (eventData.type) {
-          switch (eventData.type) {
-            case 'tradeshow':
-              eventType = 1;
-              eventTypeArray.push(1);
-              break;
-            case 'conference':
-              eventType = 2;
-              eventTypeArray.push(2);
-              break;
-            case 'workshop':
-              eventType = 3;
-              eventTypeArray.push(3);
-              break;
-            case 'meetx':
-              eventType = 3;
-              subEventType = 1;
-              eventTypeArray.push(4);
-              break;
-            case 'business floor':
-              eventType = 10;
-              eventTypeArray.push(10);
-              break;
-            default:
-              return { isValid: false, message: 'Invalid event type' };
-          }
-        } else if (eventData.eventType) {
-          eventType = typeof eventData.eventType === 'string' ? parseInt(eventData.eventType) : eventData.eventType;
-          eventTypeArray.push(eventType);
+
+        // Process new event type using URL validation
+        let eventTypeValidation: any;
+        if (eventTypeInput && Array.isArray(eventTypeInput)) {
+          eventTypeValidation = await this.validationService.validateEventTypesWithUrl(eventTypeInput);
         }
-  
-        // Add additional types from typeVal
-        if (eventData.typeVal || eventData.type_val) {
-          const typeString = eventData.typeVal || eventData.type_val;
-          if (typeString) {
-            const additionalTypes = typeString.split(',').map(t => parseInt(t.trim())).filter(t => !isNaN(t));
-            eventTypeArray.push(...additionalTypes);
-          }
+
+        if (!eventTypeValidation || !eventTypeValidation.isValid) {
+          return { isValid: false, message: eventTypeValidation?.message || 'Event type validation failed' };
         }
-  
-        eventTypeArray = [...new Set(eventTypeArray)];
-  
-        // Validate event types and get audience 
-        const typeValidation = await this.validationService.validateEventType(eventTypeArray);
-        if (!typeValidation.isValid) {
-          return { isValid: false, message: typeValidation.message };
-        }
-  
+
         return {
           isValid: true,
-          eventType,
-          subEventType,
-          eventTypeArray,
-          eventAudience: typeValidation.eventAudience
+          eventType: eventTypeValidation.eventType,
+          subEventType: eventTypeValidation.subEventType,
+          eventTypeArray: eventTypeValidation.eventTypeArray,
+          eventAudience: eventTypeValidation.eventAudience
         };
-      }
-  
-    private async validateUrlForFunctionality(eventData: EventUpsertRequestDto, existingEvent: any): Promise<{
-      isValid: boolean;
-      message?: string;
-    }> {
-      if (eventData.functionality === 'open' && !eventData.url) {
-        return { isValid: false, message: 'url is mandatory' };
-      }
-  
-      if (eventData.url) {
-        const currentUrl = existingEvent.url;
-        if (currentUrl && 
-            !currentUrl.startsWith('e1') && 
-            eventData.url !== currentUrl && 
-            !eventData.url.startsWith('e1') && 
-            currentUrl !== `event/${existingEvent.id}`) {
-          return { isValid: false, message: 'You can not change the url' };
-        }
-  
-        // Check URL uniqueness
-        const urlValidation = await this.validationService.validateUrlUniqueness(eventData.url, existingEvent.id);
-        if (!urlValidation.isValid) {
-          return { isValid: false, message: urlValidation.message };
-        }
-      }
-  
-      return { isValid: true };
-    }
-  
-    private async removeEventDescription(eventId: number, editionId: number) {
-      try {
-        await this.prisma.event_data.deleteMany({
-          where: {
-            event: eventId,
-            event_edition: editionId,
-            title: 'desc'
-          }
-        });
-  
-        return createSuccessResponse(
-          { id: eventId, edition: editionId },
-          'description removed successfully'
-        );
+
       } catch (error) {
-        return createErrorResponse(['Failed to remove description']);
+        return { isValid: false, message: 'Event type validation failed' };
       }
     }
   
-  // private async executeEventUpdate(params: {
-  //     eventData: EventUpsertRequestDto;
-  //     existingEvent: any;
-  //     rehostAnalysis: any;
-  //     company: any;
-  //     location: any;
-  //     eventTypeData: any;
-  //   }) {
-  //   const { eventData, existingEvent, rehostAnalysis, company, location, eventTypeData } = params;
-  
-  //   try {
-  //     // PHASE 1: CORE TRANSACTION
-  //     const oldCompanyId = existingEvent.event_edition_event_event_editionToevent_edition?.company_id;
-  //     const newCompanyId = company?.id;
-  //     const coreResult = await this.prisma.$transaction(async (tx) => {
-  //       let currentEdition = existingEvent.event_edition_event_event_editionToevent_edition;
-  //       let editionId = currentEdition?.id;
-  //       let isNewEdition = false;
-  
-  //       // 1. Update main event record
-  //       const eventUpdateData: any = {
-  //         modified: new Date(),
-  //         modifiedby: eventData.changesMadeBy,
-  //       };
-  
-  //       if (eventData.name) eventUpdateData.name = eventData.name;
-  //       if (eventData.abbrName || eventData.eventAbbrname) {
-  //         eventUpdateData.abbr_name = eventData.abbrName || eventData.eventAbbrname;
-  //       }
-  //       if (eventData.punchline || eventData.eventPunchline) {
-  //         eventUpdateData.punchline = eventData.punchline || eventData.eventPunchline;
-  //       }
-  //       if (eventData.website || eventData.eventWebsite) {
-  //         eventUpdateData.website = eventData.website || eventData.eventWebsite;
-  //       }
-  //       if (eventData.frequency) eventUpdateData.frequency = eventData.frequency;
-  //       if (eventData.published !== undefined) eventUpdateData.published = eventData.published === 1;
-  //       if (eventData.status || eventData.eventStatus) {
-  //         eventUpdateData.status = eventData.status || eventData.eventStatus;
-  //       }
-  //       if (eventData.functionality) eventUpdateData.functionality = eventData.functionality;
-  //       if (eventData.multiCity !== undefined) eventUpdateData.multi_city = eventData.multiCity;
-  //       if (eventData.brandId) eventUpdateData.brand_id = eventData.brandId;
-  
-  //       // Handle dates
-  //       if (eventData.startDate) eventUpdateData.start_date = new Date(eventData.startDate);
-  //       if (eventData.endDate) eventUpdateData.end_date = new Date(eventData.endDate);
-  
-  //       // Handle location updates
-  //       if (location?.city) {
-  //         eventUpdateData.city = location.city.id;
-  //         eventUpdateData.country = location.country.id;
-  //       }
-  
-  //       // Handle event type updates
-  //       if (eventTypeData) {
-  //         eventUpdateData.event_type = eventTypeData.eventType;
-  //         eventUpdateData.sub_event_type = eventTypeData.subEventType;
-  //         eventUpdateData.event_audience = eventTypeData.eventAudience?.toString();
-  //       }
-  
-  //       const updatedEvent = await tx.event.update({
-  //         where: { id: existingEvent.id },
-  //         data: eventUpdateData
-  //       });
-  
-  //       // 2. Handle rehost scenario or update existing edition
-  //       if (rehostAnalysis.isRehost || rehostAnalysis.needsNewEdition) {
-  //         const newEdition = await tx.event_edition.create({
-  //           data: {
-  //             event: existingEvent.id,
-  //             city: location?.city?.id || currentEdition.city,
-  //             venue: location?.venue?.id || (location?.removeVenue ? null : currentEdition.venue),
-  //             edition_number: (currentEdition.edition_number || 0) + 1,
-  //             start_date: eventData.startDate ? new Date(eventData.startDate) : currentEdition.start_date,
-  //             end_date: eventData.endDate ? new Date(eventData.endDate) : currentEdition.end_date,
-  //             company_id: company?.id || currentEdition.company_id,
-  //             createdby: eventData.changesMadeBy,
-  //             website: eventData.website || eventData.eventWebsite || currentEdition.website,
-  //             eep_process: eventData.eepProcess || 2,
-  //             facebook_id: eventData.facebookUrl || eventData.facebookId || currentEdition.facebook_id,
-  //             linkedin_id: eventData.linkedinId || currentEdition.linkedin_id,
-  //             twitter_id: eventData.twitterId || currentEdition.twitter_id,
-  //             twitter_hashtag: eventData.twitterHashTags || currentEdition.twitter_hashtag,
-  //             google_id: eventData.googleId || currentEdition.google_id,
-  //           }
-  //         });
-  
-  //         // Update event to point to new edition
-  //         await tx.event.update({
-  //           where: { id: existingEvent.id },
-  //           data: { event_edition: newEdition.id }
-  //         });
-  
-  //         editionId = newEdition.id;
-  //         isNewEdition = true;
-  //       } else {
-  //         // Update existing edition
-  //         const editionUpdateData: any = {
-  //           modified: new Date(),
-  //           modifiedby: eventData.changesMadeBy,
-  //         };
-  
-  //         if (eventData.startDate) editionUpdateData.start_date = new Date(eventData.startDate);
-  //         if (eventData.endDate) editionUpdateData.end_date = new Date(eventData.endDate);
-  //         if (company) editionUpdateData.company_id = company.id;
-  //         if (location?.city) editionUpdateData.city = location.city.id;
-  //         if (location?.venue) editionUpdateData.venue = location.venue.id;
-  //         if (location?.removeVenue) editionUpdateData.venue = null;
-  //         if (eventData.editionNumber) editionUpdateData.edition_number = eventData.editionNumber;
-  //         if (eventData.facebookUrl || eventData.facebookId) {
-  //           editionUpdateData.facebook_id = eventData.facebookUrl || eventData.facebookId;
-  //         }
-  //         if (eventData.linkedinId) editionUpdateData.linkedin_id = eventData.linkedinId;
-  //         if (eventData.twitterId) editionUpdateData.twitter_id = eventData.twitterId;
-  //         if (eventData.twitterHashTags) editionUpdateData.twitter_hashtag = eventData.twitterHashTags;
-  //         if (eventData.googleId) editionUpdateData.google_id = eventData.googleId;
-  //         if (eventData.areaTotal) editionUpdateData.area_total = eventData.areaTotal;
-  //         if (eventData.website || eventData.eventWebsite) {
-  //           editionUpdateData.website = eventData.website || eventData.eventWebsite;
-  //         }
-  
-  //         await tx.event_edition.update({
-  //           where: { id: currentEdition.id },
-  //           data: editionUpdateData
-  //         });
-  //       }
-  
-  //       // 3. Update basic event data 
-  //       const basicEventDataUpdates: Array<{
-  //         title: string;
-  //         data_type: string;
-  //         value: string | null;
-  //       }> = [];
-        
-  //       if (eventData.desc || eventData.description) {
-  //         basicEventDataUpdates.push({
-  //           title: 'desc',
-  //           data_type: 'TEXT',
-  //           value: eventData.desc || eventData.description || '',
-  //         });
-  //       }
-  //       if (eventData.short_desc) {
-  //         basicEventDataUpdates.push({
-  //           title: 'short_desc',
-  //           data_type: 'TEXT',
-  //           value: eventData.short_desc,
-  //         });
-  //       }
-  //       if (eventData.stream_url !== undefined) {
-  //         basicEventDataUpdates.push({
-  //           title: 'event_stream_url',
-  //           data_type: 'link',
-  //           value: eventData.stream_url || null,
-  //         });
-  //       }
-  
-  //       // Process basic updates in transaction
-  //       for (const update of basicEventDataUpdates) {
-  //         const existing = await tx.event_data.findFirst({
-  //           where: {
-  //             event: existingEvent.id,
-  //             event_edition: editionId,
-  //             title: update.title
-  //           }
-  //         });
-  
-  //         if (existing) {
-  //           await tx.event_data.update({
-  //             where: { id: existing.id },
-  //             data: {
-  //               value: update.value,
-  //               modifiedby: eventData.changesMadeBy,
-  //               modified: new Date(),
-  //             }
-  //           });
-  //         } else {
-  //           await tx.event_data.create({
-  //             data: {
-  //               event: existingEvent.id,
-  //               event_edition: editionId,
-  //               data_type: update.data_type,
-  //               title: update.title,
-  //               value: update.value,
-  //               createdby: eventData.changesMadeBy,
-  //             }
-  //           });
-  //         }
-  //       }
-  
-  //       // 4. Handle URL creation
-  //       if (eventData.url && eventData.functionality === 'open') {
-  //         await tx.url.create({
-  //           data: {
-  //             id: eventData.url,
-  //             createdby: eventData.changesMadeBy,
-  //           }
-  //         });
-          
-  //         await tx.event.update({
-  //           where: { id: existingEvent.id },
-  //           data: { url: eventData.url }
-  //         });
-  //       }
-  
-  //       return { 
-  //         updatedEvent, 
-  //         editionId, 
-  //         isNewEdition,
-  //         oldEditionId: currentEdition?.id 
-  //       };
-  //     }, {
-  //       maxWait: 5000,
-  //       timeout: 10000,
-  //     });
-  
-  //     console.log('Core transaction completed successfully');
-  
-  //     if (oldCompanyId !== newCompanyId) {
-  //         await this.handleFirebaseSessionCloning(
-  //           existingEvent.id,
-  //           oldCompanyId,
-  //           newCompanyId
-  //         );
-  //     }
-  
-  //     // PHASE 2: COPY EVENT DATA FOR REHOST
-  //     if (coreResult.isNewEdition && coreResult.oldEditionId) {
-  //       await this.copyEventDataToNewEdition(
-  //         existingEvent.id, 
-  //         coreResult.oldEditionId, 
-  //         coreResult.editionId, 
-  //         eventData.changesMadeBy
-  //       );
-  
-  //       // Handle Elasticsearch update for rehost
-  //       await this.handleRehostElasticsearch(
-  //         existingEvent.id,
-  //         coreResult.oldEditionId,
-  //         coreResult.editionId
-  //       );
-  //       console.log('Event data copied to new edition');
-  //     }
-  
-  //     // PHASE 3: COMPLEX OPERATIONS
-  //     const { updatedEvent, editionId } = coreResult;
-  
-  //     // Process stats
-  //     if (eventData.stats || eventData.eventExhibitors !== undefined || 
-  //         eventData.eventVisitors !== undefined || eventData.event_exhibitors !== undefined || 
-  //         eventData.event_visitors !== undefined) {
-  //       try {
-  //         await this.commonService.processEventStats(
-  //           existingEvent.id,
-  //           editionId,
-  //           eventData,
-  //           eventData.changesMadeBy
-  //         );
-  //         console.log('Stats processing completed');
-  //       } catch (error) {
-  //         console.error('Stats processing failed:', error);
-  //       }
-  //     }
-  
-  //     // Process products 
-  //     if (eventData.product || eventData.eventProducts) {
-  //       try {
-  //         const productData = eventData.product || eventData.eventProducts;
-  //         if (productData) {
-  //           const productResult = await this.commonService.processEventProducts(
-  //             existingEvent.id,
-  //             editionId,
-  //             productData,
-  //             eventData.changesMadeBy
-  //           );
-          
-  //         // Handle categories from products
-  //         if (eventData.category) {
-  //           const allCategories = [...eventData.category, ...productResult.categoryIds];
-  //           await this.commonService.processEventCategories(
-  //             existingEvent.id,
-  //             allCategories,
-  //             eventData.changesMadeBy
-  //           );
-  //         } else if (productResult.categoryIds.length > 0) {
-  //           await this.commonService.saveProductCategories(
-  //             existingEvent.id,
-  //             productResult.categoryIds,
-  //             eventData.changesMadeBy
-  //           );
-  //         }
-  //         }
-  //         console.log('Product processing completed');
-  //       } catch (error) {
-  //         console.error('Product processing failed:', error);
-  //       }
-  //     }
-  
-  //     // Update event categories (if not handled by products)
-  //     if (eventData.category && (!eventData.product && !eventData.eventProducts)) {
-  //       try {
-  //         await this.updateEventCategoriesStandalone(existingEvent.id, eventData.category, eventData.changesMadeBy);
-  //         console.log('Categories updated');
-  //       } catch (error) {
-  //         console.error('Category update failed:', error);
-  //       }
-  //     }
-  
-  //     // Update event types
-  //     if (eventTypeData) {
-  //       try {
-  //         await this.updateEventTypesStandalone(existingEvent.id, eventTypeData.eventTypeArray, eventData.changesMadeBy);
-  //         console.log('Event types updated');
-  //       } catch (error) {
-  //         console.error('Event type update failed:', error);
-  //       }
-  //     }
-  
-  //     // Process complex event data (timing, highlights, etc.)
-  //     if (eventData.timing || eventData.eventHighlights) {
-  //       try {
-  //         await this.updateComplexEventData(existingEvent.id, editionId, eventData);
-  //         console.log('Complex event data updated');
-  //       } catch (error) {
-  //         console.error('Complex event data update failed:', error);
-  //       }
-  //     }
-  
-  //     // Process attachments (file operations)
-  //     try {
-  //       await this.processAttachments(existingEvent.id, editionId, eventData);
-  //       console.log('Attachments processed');
-  //     } catch (error) {
-  //       console.error('Attachment processing failed:', error);
-  //     }
-  
-  //     // Process contacts 
-  //     if (eventData.contactAdd) {
-  //       try {
-  //         await this.commonService.addEventContacts(
-  //           existingEvent.id,
-  //           eventData.contactAdd,
-  //           eventData.changesMadeBy
-  //         );
-  //         console.log('Contacts added');
-  //       } catch (error) {
-  //         console.error('Contact addition failed:', error);
-  //       }
-  //     }
-  
-  //     if (eventData.contactDelete) {
-  //       try {
-  //         await this.commonService.deleteEventContacts(
-  //           existingEvent.id,
-  //           eventData.contactDelete,
-  //           eventData.changesMadeBy
-  //         );
-  //         console.log('Contacts deleted');
-  //       } catch (error) {
-  //         console.error('Contact deletion failed:', error);
-  //       }
-  //     }
-  
-  //     // Process sub-venues (can create new venues)
-  //     if (eventData.subVenue && (eventData.venue || eventData.venueId)) {
-  //       try {
-  //         const venueIdValue = eventData.venue || eventData.venueId;
-  //         if (venueIdValue) {
-  //           const venueId = typeof venueIdValue === 'string' ? parseInt(venueIdValue) : venueIdValue;
-            
-  //           const subVenueResult = await this.commonService.processSubVenues(
-  //             existingEvent.id,
-  //             editionId,
-  //             eventData.subVenue,
-  //             venueId,
-  //             eventData.changesMadeBy
-  //           );
-  
-  //           if (!subVenueResult.valid) {
-  //             console.warn('Sub-venue processing failed:', subVenueResult.message);
-  //           } else {
-  //             console.log('Sub-venues processed');
-  //           }
-  //         }
-  //       } catch (error) {
-  //         console.error('Sub-venue processing failed:', error);
-  //       }
-  //     }
-  
-  //     let shareableUrl: string | null = null;
-  //     if (eventData.createUrl === 1 || eventData.fromDashboard === 1) {
-  //       try {
-  //         shareableUrl = await this.commonService.createShareableUrl(
-  //           existingEvent.id,
-  //           eventData.changesMadeBy
-  //         );
-  //         console.log('Shareable URL created');
-  //       } catch (error) {
-  //         console.error('Shareable URL creation failed:', error);
-  //       }
-  //     }
-  
-  //     // Create review tracking
-  //     let reviewResult: { preReviewId?: number; postReviewId?: number } = {};
-      
-  //     try {
-  //       // STEP 1: Get existing data before update
-  //       const existingData = await this.getExistingEventData(existingEvent.id, existingEvent.event_edition);
-        
-  //       // STEP 2: Create PreReview with EXISTING data
-  //       const preReviewData = createEventReviewData(
-  //         existingEvent.id,
-  //         existingEvent.name,
-  //         eventData.changesMadeBy,
-  //         {
-  //           description: existingData.currentDescription ?? undefined,
-  //           startDate: existingEvent.start_date?.toISOString().split('T')[0],
-  //           endDate: existingEvent.end_date?.toISOString().split('T')[0],
-  //           functionality: existingEvent.functionality,
-  //           website: existingEvent.website,
-  //           eventAudience: existingEvent.event_audience,
-  //           bypassQC: true,
-  //         }
-  //       );
-
-  //       const preReviewId = await this.unifiedReviewService.createPreReview(preReviewData);
-  //       reviewResult.preReviewId = preReviewId;
-
-  //       // STEP 3: Create PostReview with NEW data
-  //       const postReviewData = createEventReviewData(
-  //         existingEvent.id,
-  //         existingEvent.name,
-  //         eventData.changesMadeBy,
-  //         {
-  //           description: eventData.desc || eventData.description,
-  //           startDate: eventData.startDate,
-  //           endDate: eventData.endDate,
-  //           functionality: eventData.functionality,
-  //           website: eventData.website || eventData.eventWebsite,
-  //           eventAudience: eventData.eventAudience,
-  //           bypassQC: true,
-  //         }
-  //       );
-
-  //       const postReviewId = await this.unifiedReviewService.createPostReview({
-  //         ...postReviewData,
-  //         preReviewId: preReviewId,
-  //         oldData: preReviewData.content,
-  //         newData: postReviewData.content,
-  //         apiPayload: eventData, // Full API payload
-  //       });
-        
-  //       reviewResult.postReviewId = postReviewId;
-        
-  //       this.logger.log(`Created reviews - Pre: ${reviewResult.preReviewId}, Post: ${reviewResult.postReviewId}`);
-  //     } catch (reviewError) {
-  //       this.logger.error('Review creation failed:', reviewError);
-  //     }
-  
-  //     console.log('All processing completed successfully');
-  
-  //     return createSuccessResponse(
-  //       {
-  //         id: existingEvent.id,
-  //         edition: editionId,
-  //         shareableUrl: shareableUrl,
-  //         pre_review: reviewResult.preReviewId,
-  //         post_review: reviewResult.postReviewId,
-  //       },
-  //       'updated'
-  //     );
-  
-  //   } catch (error) {
-  //     console.error('Event update failed:', error);
-  //     return createErrorResponse([error.message || 'Event update failed']);
-  //   }
-  // }
-  
-  private async copyEventDataToNewEdition(
-    eventId: number, 
-    oldEditionId: number, 
-    newEditionId: number, 
-    userId: number
-  ) {
-    try {
-      const existingEventData = await this.prisma.event_data.findMany({
-        where: {
-          event: eventId,
-          event_edition: oldEditionId,
-          title: { not: 'event_media' }
-        }
-      });
-  
-      if (existingEventData.length > 0) {
-        const newEventData = existingEventData.map(data => ({
-          event: eventId,
-          event_edition: newEditionId,
-          data_type: data.data_type,
-          title: data.title,
-          value: data.value,
-          published: data.published,
-          createdby: userId,
-        }));
-  
-        await this.prisma.event_data.createMany({
-          data: newEventData
-        });
-      }
-    } catch (error) {
-      console.error('Failed to copy event data:', error);
-      throw error;
-    }
-  }
-  
-  private async updateEventCategoriesStandalone(eventId: number, categoryIds: number[], userId: number) {
-    await this.prisma.event_category.deleteMany({
-      where: { event: eventId }
-    });
-  
-    if (categoryIds.length > 0) {
-      const categoryData = categoryIds.map(categoryId => ({
-        category: categoryId,
-        event: eventId,
-        createdby: userId,
-      }));
-  
-      await this.prisma.event_category.createMany({
-        data: categoryData
-      });
-    }
-  }
-  
-  private async updateEventTypesStandalone(eventId: number, eventTypeIds: number[], userId: number) {
-    await this.prisma.event_type_event.updateMany({
+  private async updateEventTypesStandalone(eventId: number, eventTypeIds: number[], userId: number, prisma?: any) {
+    const db = prisma || this.prisma;
+    await db.event_type_event.updateMany({
       where: { event_id: eventId },
       data: { 
         published: 0,
@@ -1908,7 +1940,7 @@ export class EventService {
   
     // Add/update event types
     for (const typeId of eventTypeIds) {
-      const existing = await this.prisma.event_type_event.findFirst({
+      const existing = await db.event_type_event.findFirst({
         where: {
           eventtype_id: typeId,
           event_id: eventId
@@ -1916,7 +1948,7 @@ export class EventService {
       });
   
       if (existing) {
-        await this.prisma.event_type_event.update({
+        await db.event_type_event.update({
           where: { id: existing.id },
           data: { 
             published: 1,
@@ -1924,7 +1956,7 @@ export class EventService {
           }
         });
       } else {
-        await this.prisma.event_type_event.create({
+        await db.event_type_event.create({
           data: {
             eventtype_id: typeId,
             event_id: eventId,
@@ -1936,92 +1968,33 @@ export class EventService {
     }
   }
   
-  private async updateComplexEventData(eventId: number, editionId: number, eventData: EventUpsertRequestDto) {
-    const updates: Array<{
-      title: string;
-      data_type: string;
-      value: string;
-    }> = [];
-  
-    if (eventData.timing) {
-      updates.push({
-        title: 'timing',
-        data_type: 'JSON',
-        value: typeof eventData.timing === 'string' ? eventData.timing : JSON.stringify(eventData.timing),
-      });
-    }
-  
-    if (eventData.eventHighlights) {
-      updates.push({
-        title: 'event_highlights',
-        data_type: 'JSON',
-        value: eventData.eventHighlights,
-      });
-    }
-  
-    for (const update of updates) {
-      const existing = await this.prisma.event_data.findFirst({
-        where: {
-          event: eventId,
-          event_edition: editionId,
-          title: update.title
-        }
-      });
-  
-      if (existing) {
-        await this.prisma.event_data.update({
-          where: { id: existing.id },
-          data: {
-            value: update.value,
-            modifiedby: eventData.changesMadeBy,
-            modified: new Date(),
-          }
-        });
-      } else {
-        await this.prisma.event_data.create({
-          data: {
-            event: eventId,
-            event_edition: editionId,
-            data_type: update.data_type,
-            title: update.title,
-            value: update.value,
-            createdby: eventData.changesMadeBy,
-          }
-        });
-      }
-    }
-  }
-  
-    private async processAttachments(eventId: number, editionId: number, eventData: EventUpsertRequestDto) {
+    private async processAttachments(
+      eventData: EventUpsertRequestDto,
+      eventId: number,
+      editionId: number,
+      userId: number,
+      prisma: any
+    ): Promise<void> {
       // Process intro video
-      if (eventData.introvideo) {
+      if (eventData.introVideo) {
         await this.commonService.processIntroVideo(
           eventId,
           editionId,
-          eventData.introvideo,
-          eventData.changesMadeBy
+          eventData.introVideo,
+          userId
         );
       }
-  
+
       // Process event documents
-      if (eventData.eventDocs) {
+      if (eventData.docs) {
         await this.commonService.processEventDocuments(
           eventId,
           editionId,
-          eventData.eventDocs,
-          eventData.changesMadeBy
+          eventData.docs,
+          userId
         );
       }
-  
-      // Delete event documents
-      if (eventData.deleteEventDocs) {
-        await this.commonService.deleteEventDocuments(
-          eventId,
-          editionId,
-          eventData.deleteEventDocs
-        );
-      }
-  
+
       // Process brochure
       if (eventData.brochure) {
         await this.commonService.processAttachment(
@@ -2029,28 +2002,48 @@ export class EventService {
           editionId,
           eventData.brochure,
           'brochure',
-          eventData.changesMadeBy
+          userId
         );
       }
-  
-      // Process OG image
-      if (eventData.og_image) {
+
+      if (eventData.logo) {
         await this.commonService.processAttachment(
           eventId,
           editionId,
-          eventData.og_image,
-          'event_og_image',
-          eventData.changesMadeBy
+          eventData.logo,
+          'logo',
+          userId
         );
       }
-  
+
+      if (eventData.wrapper) {
+        await this.commonService.processAttachment(
+          eventId,
+          editionId,
+          eventData.wrapper,
+          'wrapper',
+          userId
+        );
+      }
+
+      // Process OG image
+      if (eventData.ogImage) {
+        await this.commonService.processAttachment(
+          eventId,
+          editionId,
+          eventData.ogImage,
+          'event_og_image',
+          userId
+        );
+      }
+
       // Process customization
       if (eventData.customization) {
         await this.commonService.processCustomization(
           eventId,
           editionId,
           eventData.customization,
-          eventData.changesMadeBy
+          userId
         );
       }
     }
@@ -2081,6 +2074,122 @@ export class EventService {
       });
       
       return event?.event_edition || 0;
+    }
+
+    private async processSalesData(
+      eventData: EventUpsertRequestDto,
+      editionId: number,
+      userId: number,
+      prisma?: any
+    ): Promise<{ valid: boolean; message?: string }> {
+      const db = prisma || this.prisma;
+      
+      try {
+        // Only process if salesAction is provided
+        if (!eventData.salesAction) {
+          return { valid: true };
+        }
+
+        // Validate salesAction format
+        const actionValidation = this.validationService.validateSalesAction(eventData.salesAction);
+        if (!actionValidation.isValid) {
+          return { valid: false, message: actionValidation.message };
+        }
+
+        // Validate salesActionBy user exists (required when salesAction is provided)
+        if (!eventData.salesActionBy) {
+          return { 
+            valid: false, 
+            message: 'salesActionBy is required when salesAction is provided' 
+          };
+        }
+
+        const userValidation = await this.validationService.validateSalesActionBy(eventData.salesActionBy);
+        if (!userValidation.isValid) {
+          return { valid: false, message: userValidation.message };
+        }
+
+        // Update the edition with sales data
+        const updateData: any = {
+          sales_action: new Date(eventData.salesAction),
+          sales_action_by: eventData.salesActionBy,
+          modified: new Date(),
+          modifiedby: userId,
+        };
+
+        if (eventData.salesStatus) {
+          updateData.sales_status = eventData.salesStatus;
+        }
+
+        if (eventData.salesRemark) {
+          updateData.sales_remark = eventData.salesRemark;
+        }
+
+        await db.event_edition.update({
+          where: { id: editionId },
+          data: updateData
+        });
+
+        // Update event_update table if sales_status is provided
+        if (eventData.salesStatus) {
+          await this.updateEventUpdateSalesStatus(
+            eventData.eventId!,
+            editionId,
+            eventData.salesStatus,
+            db
+          );
+        }
+
+        return { valid: true };
+      } catch (error) {
+        this.logger.error(`Failed to process sales data:`, error);
+        return { 
+          valid: false, 
+          message: 'Failed to process sales data' 
+        };
+      }
+    }
+
+    private async updateEventUpdateSalesStatus(
+      eventId: number,
+      editionId: number,
+      salesStatus: string,
+      prisma?: any
+    ): Promise<void> {
+      const db = prisma || this.prisma;
+      
+      try {
+        // Use compound unique constraint properly
+        const eventUpdate = await db.event_update.findFirst({
+          where: {
+            event_id: eventId,
+            edition: editionId,
+          }
+        });
+
+        if (eventUpdate) {
+          // Get the end_date for the compound unique constraint
+          await db.event_update.update({
+            where: {
+              // Use compound unique constraint: event_id + end_date
+              event_id_end_date: {
+                event_id: eventId,
+                end_date: eventUpdate.end_date,
+              }
+            },
+            data: {
+              sales_status: salesStatus,
+              modified: new Date(),
+            }
+          });
+          
+          this.logger.log(`Updated event_update sales_status for event ${eventId}`);
+        } else {
+          this.logger.warn(`No event_update record found for event ${eventId}, edition ${editionId}`);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to update event_update sales status:`, error);
+      }
     }
   
     private async sendRabbitMQMessages(
@@ -2157,30 +2266,14 @@ export class EventService {
       }
     }
   
-    private async handleRehostElasticsearch(
-      eventId: number, 
-      oldEditionId: number, 
-      newEditionId: number
-    ): Promise<void> {
-      try {
-        this.logger.log(`Handling rehost Elasticsearch update for event ${eventId}: ${oldEditionId} -> ${newEditionId}`);
-        
-        // Re-index the event with new edition data
-        await this.indexToElasticsearch(eventId, true);
-        
-      } catch (error) {
-        this.logger.error(`Failed to handle rehost Elasticsearch update for event ${eventId}:`, error.message);
-      }
-    }
-  
     private shouldSendVisitorEsMessage(eventData: EventUpsertRequestDto): boolean {
       return !!(
         eventData.city || 
         eventData.venue || 
-        eventData.status || 
-        eventData.functionality ||
-        eventData.published !== undefined ||
-        eventData.online_event !== undefined
+        // eventData.status || 
+        eventData.visibility
+        // eventData.published !== undefined 
+        // eventData.online_event !== undefined
       );
     }
   
@@ -2188,9 +2281,8 @@ export class EventService {
       return !!(
         eventData.startDate || 
         eventData.endDate || 
-        eventData.eventType || 
-        eventData.type ||
-        eventData.functionality === 'open'
+        eventData.type || 
+        eventData.visibility
       );
     }
   
@@ -2248,10 +2340,10 @@ export class EventService {
       }
     }
 
-  async createEvent(createEventDto: CreateEventRequestDto, req?: any): Promise<CreateEventResponseDto> {
+  async createEvent(createEventDto: CreateEventRequestDto, userId: number, req?: any): Promise<CreateEventResponseDto> {
 
-    const validationResult = await this.performAllValidations(createEventDto);
-  
+    const validationResult = await this.performAllValidations(createEventDto, userId);
+
     if (!validationResult.isValid) {
       return createErrorResponse(validationResult.messages, validationResult.errors) as CreateEventResponseDto;
     }
@@ -2261,7 +2353,10 @@ export class EventService {
       dateProcessing,
       eventTypeValidation,
       dateValidation,
-      locationData
+      locationData,
+      categoryData,
+      companyData,
+      mainEventData
     } = validationResult.validatedData!;
 
     // Step 6: Core database transaction
@@ -2276,6 +2371,8 @@ export class EventService {
           dateProcessing,
           eventTypeValidation,
           locationData,
+          companyData,
+          userId,
           prisma
         );
 
@@ -2288,7 +2385,9 @@ export class EventService {
           startDate: dateProcessing.processedStartDate,
           endDate: dateProcessing.processedEndDate,
           customFlag: dateProcessing.customFlag,
-          edition: undefined
+          edition: undefined,
+          company: companyData?.company?.id,
+          changesMadeBy: userId,
         }, prisma);
 
         if (!edition.isValid) {
@@ -2308,10 +2407,53 @@ export class EventService {
         if (createEventDto.category) {
           await this.createCategoryAssociations(
             event.id,
-            createEventDto.category,
-            createEventDto.changesMadeBy,
+            categoryData,
+            userId,
             prisma
           );
+        }
+
+        let productCategoryIds: number[] = [];
+        if (createEventDto.product) {
+          try {
+            const productResult = await this.commonService.processEventProducts(
+              event.id,
+              validatedEditionId,
+              createEventDto.product,
+              userId,
+              prisma
+            );
+            productCategoryIds = productResult.categoryIds;
+
+            // Merge product categories with user categories
+            if (createEventDto.category && categoryData?.categoryIds) {
+              const allCategories = [...categoryData.categoryIds, ...productCategoryIds];
+              const uniqueCategories = [...new Set(allCategories)];
+              
+              // Update event categories with merged list
+              await this.commonService.processEventCategories(
+                event.id,
+                uniqueCategories,
+                userId,
+                undefined,
+                undefined,
+                prisma
+              );
+            } else if (productCategoryIds.length > 0) {
+              // Only save product categories if no user categories
+              await this.commonService.saveProductCategories(
+                event.id,
+                productCategoryIds,
+                userId,
+                prisma
+              );
+            }
+
+            this.logger.log(`Processed ${Object.keys(JSON.parse(createEventDto.product)).length} products for event ${event.id}`);
+          } catch (error) {
+            this.logger.error('Product processing failed:', error);
+            throw new Error(`Product processing failed: ${error.message}`);
+          }
         }
 
         // Create Event Data entries
@@ -2319,15 +2461,16 @@ export class EventService {
           event.id,
           validatedEditionId,
           createEventDto,
+          userId,
           prisma
         );
 
         // Create Contact Entry
-        await this.createContactEntry(event.id, createEventDto.changesMadeBy, prisma);
+        await this.createContactEntry(event.id, userId, prisma);
 
-        await this.createUserEventMapping(event.id, createEventDto, prisma);
+        await this.createUserEventMapping(event.id, createEventDto, mainEventData, userId, prisma);
 
-        await this.createEventSettings(event.id, createEventDto, prisma);
+        // await this.createEventSettings(event.id, createEventDto, prisma);
 
         // Create Default Questionnaire
         await this.createDefaultQuestionnaire(event.id, prisma);
@@ -2335,9 +2478,8 @@ export class EventService {
         // Handle Event Type Mappings
         await this.createEventTypeAssociations(
           event.id,
-          createEventDto.type,
-          createEventDto.type_val,
-          createEventDto.changesMadeBy,
+          eventTypeValidation.eventTypeArray,
+          userId,
           prisma
         );
 
@@ -2373,9 +2515,9 @@ export class EventService {
       const reviewData = createEventReviewData(
         eventData.id,
         eventData.name,
-        createEventDto.changesMadeBy,
+        userId,
         {
-          description: createEventDto.description,
+          // description: createEventDto.description,
           startDate: dateProcessing.processedStartDate,
           endDate: dateProcessing.processedEndDate,
           functionality: eventData.functionality,
@@ -2397,10 +2539,8 @@ export class EventService {
       this.logger.log(`Successfully created event ${eventData.id} with edition ${editionData.editionId}`);
 
      return createSuccessResponse({
-      id: eventData.id,
-      edition: editionData.editionId,
-      pre_review: preReviewId,
-      post_review: postReviewId,
+      eventId: eventData.id,
+      editionId: editionData.editionId,
     }, 'inserted') as CreateEventResponseDto;
 
     } catch (postError) {
@@ -2411,10 +2551,8 @@ export class EventService {
 
       // Still return success since core event was created
       return createSuccessResponse({
-        id: eventData.id,
-        edition: editionData.editionId,
-        pre_review: preReviewId,
-        post_review: postReviewId,
+        eventId: eventData.id,
+        editionId: editionData.editionId,
       }, 'inserted') as CreateEventResponseDto;
     }
   }
@@ -2453,101 +2591,123 @@ export class EventService {
   }
 
 
-  private async performAllValidations(dto: CreateEventRequestDto): Promise<{
-    isValid: boolean;
-    messages: string[];
-    errors: string[];
-    validatedData?: {
-      dateProcessing: any;
-      eventTypeValidation: any;
-      dateValidation: any;
-      locationData: any;
-    };
-  }> {
-    const messages: string[] = [];
-    const errors: string[] = [];
-    let validatedData: any = {};
+    private async performAllValidations(dto: CreateEventRequestDto, userId: number): Promise<{
+      isValid: boolean;
+      messages: string[];
+      errors: string[];
+      validatedData?: {
+        dateProcessing: any;
+        eventTypeValidation: any;
+        dateValidation: any;
+        locationData: any;
+        categoryData?: any;
+        companyData?: any;
+        mainEventData?: any;
+      };
+    }> {
+      const messages: string[] = [];
+      const errors: string[] = [];
+      let validatedData: any = {};
 
-    try {
-      // Step 1: Basic validations
-      const userValidation = await this.validationService.validateUser(dto.changesMadeBy);
-      if (!userValidation.isValid) {
-        messages.push(userValidation.message ?? 'Unknown user validation error');
-      }
-
-      if (dto.mainEvent) {
-        const mainEventValidation = await this.validationService.validateMainEvent(dto.mainEvent);
-        if (!mainEventValidation.isValid) {
-          messages.push(mainEventValidation.message ?? 'Unknown main event validation error');
+      try {
+        // Step 1: Basic validations
+        const userValidation = await this.validationService.validateUser(userId);
+        if (!userValidation.isValid) {
+          messages.push(userValidation.message ?? 'Unknown user validation error');
         }
-      }
 
-      if (dto.category) {
-        const categoryValidation = await this.validationService.validateCategories(dto.category);
-        if (!categoryValidation.isValid) {
-          messages.push(categoryValidation.message ?? 'Unknown category validation error');
+        if (dto.mainEvent) {
+          const mainEventValidation = await this.validationService.validateMainEvent(dto.mainEvent);
+          if (!mainEventValidation.isValid) {
+            messages.push(mainEventValidation.message ?? 'Unknown main event validation error');
+          } else {
+            validatedData.mainEventData = mainEventValidation;
+          }
         }
-      }
 
-      // Step 2: Process and validate dates
-      const dateProcessing = this.validationService.processDates(
-        dto.startDate,
-        dto.endDate
-      );
-      validatedData.dateProcessing = dateProcessing;
+        if (dto.category && dto.category.length > 0) {
+          const categoryValidation = await this.validationService.resolveCategoriesByUrl(dto.category);
+          if (!categoryValidation.isValid) {
+            messages.push(categoryValidation.message ?? 'Unknown category validation error');
+          } else {
+            validatedData.categoryData = categoryValidation;
+          }
+        }
 
-      // Step 3: Validate event type
-      const eventTypeValidation = await this.validationService.validateEventType(
-        this.mapEventTypeToArray(dto.type, dto.type_val)
-      );
-
-      if (!eventTypeValidation.isValid) {
-        messages.push(eventTypeValidation.message ?? 'Unknown event type validation error');
-      } else {
-        validatedData.eventTypeValidation = eventTypeValidation;
-      }
-
-      // Step 4: Date logic validation 
-      if (eventTypeValidation.isValid) {
-        const dateValidation = this.validationService.validateDateLogic(
-          dateProcessing.processedStartDate,
-          dateProcessing.processedEndDate,
-          (eventTypeValidation.eventAudience ?? '').toString()
+        // Step 2: Process and validate dates
+        const dateProcessing = this.validationService.processDates(
+          dto.startDate,
+          dto.endDate
         );
+        validatedData.dateProcessing = dateProcessing;
 
-        if (!dateValidation.isValid) {
-          messages.push(dateValidation.message ?? 'Unknown date validation error');
+        // Step 3: Validate event type - only handle arrays now
+        const eventTypeValidation = await this.validationService.validateEventTypesWithUrl(dto.type);
+
+        if (!eventTypeValidation.isValid) {
+          messages.push(eventTypeValidation.message ?? 'Unknown event type validation error');
         } else {
-          validatedData.dateValidation = dateValidation;
+          validatedData.eventTypeValidation = eventTypeValidation;
         }
+
+        // Step 4: Date logic validation 
+        if (eventTypeValidation.isValid) {
+          const dateValidation = this.validationService.validateDateLogic(
+            dateProcessing.processedStartDate,
+            dateProcessing.processedEndDate,
+            (eventTypeValidation.eventAudience ?? '').toString()
+          );
+
+          if (!dateValidation.isValid) {
+            messages.push(dateValidation.message ?? 'Unknown date validation error');
+          } else {
+            validatedData.dateValidation = dateValidation;
+          }
+
+          const now = new Date();
+          const startDate = new Date(dateProcessing.processedStartDate);
+          const endDate = new Date(dateProcessing.processedEndDate);
+          
+          if (startDate < now || endDate < now) {
+            messages.push('Event dates must be in the future for new events');
+          }
+        }
+
+        // Step 5: Location validation
+        const locationData = await this.resolveLocation(dto);
+        if (!locationData.isValid) {
+          messages.push(locationData.message ?? 'Unknown location error');
+        } else {
+          validatedData.locationData = locationData;
+        }
+
+        if (dto.company) {
+          const companyValidation = await this.validationService.validateCompany(dto.company);
+          if (!companyValidation.isValid) {
+            messages.push(companyValidation.message ?? 'Unknown company validation error');
+          } else {
+            validatedData.companyData = companyValidation;
+          }
+        }
+
+        return {
+          isValid: messages.length === 0,
+          messages,
+          errors,
+          validatedData: messages.length === 0 ? validatedData : undefined,
+        };
+
+      } catch (error) {
+        errors.push(`Validation failed: ${error.message}`);
+        return {
+          isValid: false,
+          messages,
+          errors,
+        };
       }
-
-      // Step 5: Location validation
-      const locationData = await this.resolveLocation(dto);
-      if (!locationData.isValid) {
-        messages.push(locationData.message ?? 'Unknown location error');
-      } else {
-        validatedData.locationData = locationData;
-      }
-
-      return {
-        isValid: messages.length === 0,
-        messages,
-        errors,
-        validatedData: messages.length === 0 ? validatedData : undefined,
-      };
-
-    } catch (error) {
-      errors.push(`Validation failed: ${error.message}`);
-      return {
-        isValid: false,
-        messages,
-        errors,
-      };
     }
-  }
 
-  private mapEventTypeToArray(type: string, typeVal?: string): number[] {
+  private mapEventTypeToArray(types: string[], typeVal?: string): number[] {
     let eventTypes: number[] = [];
     
     if (typeVal) {
@@ -2558,16 +2718,198 @@ export class EventService {
       'tradeshow': 1,
       'conference': 2,
       'workshop': 3,
-      'meetx': 4,
-      'business floor': 10,
+      'meetup': 4,
+      'business-floor': 10,
     };
 
-    const mappedType = typeMapping[type];
-    if (mappedType) {
-      eventTypes.push(mappedType);
+    for (const type of types) {
+      const mappedType = typeMapping[type];
+      if (mappedType) {
+        eventTypes.push(mappedType);
+      }
     }
 
     return [...new Set(eventTypes)]; 
+  }
+
+  private async processSubVenues(
+    eventId: number,
+    editionId: number,
+    eventData: EventUpsertRequestDto,
+    userId: number,
+    tx: any
+  ): Promise<void> {
+    try {
+      // Type safety check
+      if (!eventData.subVenue || typeof eventData.subVenue !== 'string') {
+        this.logger.warn(`SubVenue processing skipped for event ${eventId}: invalid subVenue data`);
+        return;
+      }
+
+      this.logger.log(`Starting subVenue processing for event ${eventId}, edition ${editionId}`);
+      this.logger.log(`SubVenue data: ${eventData.subVenue}`);
+
+      // Get venue ID from multiple sources
+      let venueId: number | undefined;
+      
+      // 1. Check if venue was updated in this request
+      if (eventData.venue) {
+        this.logger.log(`Venue found in request data: ${eventData.venue}`);
+        if (typeof eventData.venue === 'number') {
+          venueId = eventData.venue;
+        } else if (typeof eventData.venue === 'string' && this.isNumeric(eventData.venue)) {
+          venueId = parseInt(eventData.venue);
+        }
+        this.logger.log(`Parsed venue ID from request: ${venueId}`);
+      } else {
+        this.logger.log(`No venue in request data, checking database...`);
+      }
+      
+      // 2. If no venue in request, get from current edition
+      if (!venueId) {
+        this.logger.log(`Checking current edition ${editionId} for venue...`);
+        const currentEdition = await tx.event_edition.findUnique({
+          where: { id: editionId },
+          select: { venue: true }
+        });
+        venueId = currentEdition?.venue || undefined;
+        this.logger.log(`Current edition venue: ${venueId}`);
+      }
+      
+      // 3. If still no venue, get from main event's current edition
+      if (!venueId) {
+        this.logger.log(`Checking main event ${eventId} for venue...`);
+        const event = await tx.event.findUnique({
+          where: { id: eventId },
+          include: {
+            event_edition_event_event_editionToevent_edition: {
+              select: { venue: true }
+            }
+          }
+        });
+        venueId = event?.event_edition_event_event_editionToevent_edition?.venue || undefined;
+        this.logger.log(`Main event current edition venue: ${venueId}`);
+      }
+
+      if (!venueId) {
+        this.logger.warn(`SubVenue processing skipped for event ${eventId}: no venue found after checking all sources`);
+        
+        // Let's also check what data we actually have
+        const debugEvent = await tx.event.findUnique({
+          where: { id: eventId },
+          include: {
+            event_edition_event_event_editionToevent_edition: {
+              select: { 
+                id: true,
+                venue: true,
+                city: true,
+                company_id: true 
+              }
+            }
+          }
+        });
+        
+        this.logger.log(`Debug - Event data:`, {
+          eventId: debugEvent?.id,
+          currentEdition: debugEvent?.event_edition_event_event_editionToevent_edition
+        });
+        
+        return;
+      }
+
+      this.logger.log(`Using venue ID: ${venueId} for subVenue processing`);
+
+      // Process sub-venues using CommonService
+      const result = await this.commonService.processSubVenues(
+        eventId,
+        editionId,
+        eventData.subVenue,
+        venueId,
+        userId,
+        tx
+      );
+
+      if (result.valid) {
+        this.logger.log(`Successfully processed ${result.subVenueIds?.length || 0} sub-venues for event ${eventId}`);
+      } else {
+        this.logger.warn(`SubVenue processing failed for event ${eventId}: ${result.message}`);
+      }
+    } catch (error) {
+      this.logger.error(`SubVenue processing error for event ${eventId}:`, error);
+      // Don't throw - this is not critical enough to fail the entire update
+    }
+  }
+
+  // Add this helper method if it doesn't exist:
+  private isNumeric(value: any): boolean {
+    return !isNaN(Number(value)) && !isNaN(parseFloat(value.toString()));
+  }
+
+  private async processEventSettings(
+    eventId: number,
+    settingsData: string,
+    userId: number,
+    prisma?: any
+  ): Promise<{ valid: boolean; message?: string }> {
+    const db = prisma || this.prisma;
+    
+    try {
+      if (!settingsData || settingsData.trim() === '') {
+        return { valid: true };
+      }
+
+      // Validate using ValidationService
+      const validation = this.validationService.validateEventSettings(settingsData);
+      if (!validation.isValid) {
+        return { valid: false, message: validation.message };
+      }
+
+      const settings = validation.settings;
+
+      // Check if event settings already exist
+      const existingSettings = await db.event_settings.findFirst({
+        where: { event_id: eventId }
+      });
+
+      if (existingSettings) {
+        // Update existing settings
+        const updateData: any = {
+          modified: new Date(),
+          modified_by: userId,
+        };
+
+        // Map camelCase to snake_case and update only provided fields
+        if (settings.autoApproval !== undefined) updateData.auto_approval = settings.autoApproval;
+        if (settings.regStartDate) updateData.reg_start_date = new Date(settings.regStartDate);
+        if (settings.regEndDate) updateData.reg_end_date = new Date(settings.regEndDate);
+        if (settings.capacity !== undefined) updateData.capacity = settings.capacity;
+
+        await db.event_settings.update({
+          where: { id: existingSettings.id },
+          data: updateData
+        });
+      } else {
+        // Create new settings
+        await db.event_settings.create({
+          data: {
+            event_id: eventId,
+            created_by: userId,
+            auto_approval: settings.autoApproval ?? 0,
+            reg_start_date: settings.regStartDate ? new Date(settings.regStartDate) : null,
+            reg_end_date: settings.regEndDate ? new Date(settings.regEndDate) : null,
+            capacity: settings.capacity ?? null,
+          }
+        });
+      }
+
+      return { valid: true };
+    } catch (error) {
+      this.logger.error(`Failed to process event settings for event ${eventId}:`, error);
+      return { 
+        valid: false, 
+        message: 'Failed to process event settings' 
+      };
+    }
   }
 
   private async resolveLocation(dto: CreateEventRequestDto) {
@@ -2578,10 +2920,17 @@ export class EventService {
 
       if (dto.venue) {
         if (typeof dto.venue === 'string') {
-          return {
-            isValid: false,
-            message: 'Google Place ID resolution not implemented yet - use numeric venue ID',
-          };
+          const venueResult = await this.validationService.resolveVenueByUrl(dto.venue);
+          if (!venueResult.isValid) {
+            return {
+              isValid: false,
+              message: venueResult.message,
+            };
+          }
+          
+          venueId = venueResult.venue!.id;
+          cityId = venueResult.venue!.city;
+          countryId = venueResult.venue!.country;
         } else {
           const venue = await this.prisma.venue.findUnique({
             where: { id: dto.venue },
@@ -2604,12 +2953,19 @@ export class EventService {
           cityId = venue.city;
           countryId = venue.country;
         }
-      } else if (dto.city) {
+      } 
+      else if (dto.city) {
         if (typeof dto.city === 'string') {
-          return {
-            isValid: false,
-            message: 'Google Place ID resolution not implemented yet - use numeric city ID',
-          };
+          const cityResult = await this.validationService.resolveCityByUrl(dto.city);
+          if (!cityResult.isValid) {
+            return {
+              isValid: false,
+              message: cityResult.message,
+            };
+          }
+          
+          cityId = cityResult.city!.id;
+          countryId = cityResult.city!.country;
         } else {
           const city = await this.prisma.city.findUnique({
             where: { id: dto.city },
@@ -2630,22 +2986,35 @@ export class EventService {
           cityId = city.id;
           countryId = city.country;
         }
-      } else if (dto.country) {
-        return {
-          isValid: false,
-          message: 'City is required - cannot create event with only country',
-        };
-      } else {
-        return {
-          isValid: false,
-          message: 'Either venue or city must be provided',
-        };
+      } 
+      if (dto.country && typeof dto.country === 'string') {
+        const countryResult = await this.validationService.resolveCountryByUrl(dto.country);
+        if (!countryResult.isValid) {
+          return {
+            isValid: false,
+            message: countryResult.message,
+          };
+        }
+        
+        if (countryId && countryId !== countryResult.country!.id) {
+          return {
+            isValid: false,
+            message: `City and country do not match. City is in "${countryId}" but country provided is "${dto.country}"`,
+          };
+        }
+        
+        if (!cityId) {
+          return {
+            isValid: false,
+            message: 'City is required - cannot create event with only country',
+          };
+        }
       }
 
       if (!cityId) {
         return {
           isValid: false,
-          message: 'Could not resolve city ID',
+          message: 'Either venue or city must be provided',
         };
       }
 
@@ -2656,6 +3025,7 @@ export class EventService {
         };
       }
 
+      // Validate that the country exists
       const countryExists = await this.prisma.country.findUnique({
         where: { id: countryId },
         select: { id: true, name: true },
@@ -2687,26 +3057,31 @@ export class EventService {
     dateProcessing: any,
     eventTypeValidation: any,
     locationData: any,
+    companyData: any,
+    userId: number,
     prisma: any
   ) {
-    const typeMapping = {
-      'tradeshow': { eventType: 1, subEventType: null },
-      'conference': { eventType: 2, subEventType: null },
-      'workshop': { eventType: 3, subEventType: null },
-      'meetx': { eventType: 3, subEventType: 1 },
-      'business floor': { eventType: 10, subEventType: null },
-    };
+    // const typeMapping = {
+    //   'tradeshow': { eventType: 1, subEventType: null },
+    //   'conference': { eventType: 2, subEventType: null },
+    //   'workshop': { eventType: 3, subEventType: null },
+    //   'meetx': { eventType: 3, subEventType: 1 },
+    //   'business floor': { eventType: 10, subEventType: null },
+    // };
 
-    const { eventType, subEventType } = typeMapping[dto.type];
+    // const { eventType, subEventType } = typeMapping[dto.type];
 
-    let functionality = 'open';
-    if (dto.public === 'yes') functionality = 'draft';
-    if (dto.public === 'no') functionality = 'private';
-    if (dto.functionality === 'open' && (dto.from === 'manage' || eventType === 10)) {
-      functionality = 'open';
-    } else if (dto.functionality === 'draft' && dto.fromDashboard === 1) {
-      functionality = 'draft';
-    }
+    const eventType = eventTypeValidation.eventType;
+    const subEventType = eventTypeValidation.subEventType || null;
+
+    // let functionality = 'open';
+    // if (dto.public === 'yes') functionality = 'draft';
+    // if (dto.public === 'no') functionality = 'private';
+    // if (dto.functionality === 'open') {
+    //   functionality = 'open';
+    // } else if (dto.functionality === 'draft') {
+    //   functionality = 'draft';
+    // }
 
     if (!locationData.cityId || !locationData.countryId) {
       throw new Error(`Both city and country are required. Got city: ${locationData.cityId}, country: ${locationData.countryId}`);
@@ -2718,52 +3093,52 @@ export class EventService {
         city: locationData.cityId,                         
         country: locationData.countryId,
         event_type: eventType,
-        mail_type: 1, 
-        published: dto.publish === 2 ? false : true,
-        adsense: false,
+        // mail_type: 1, 
+        published: true,
+        // adsense: false,
         created: new Date(),
         abbr_name: dto.abbrName || null,
-        zh_name: null,
-        native_name: null,
+        // zh_name: null,
+        // native_name: null,
         event_edition: null,
         start_date: new Date(dateProcessing.processedStartDate),
         end_date: new Date(dateProcessing.processedEndDate),
         website: dto.website || null,
-        frequency: null,
+        // frequency: null,
         url: null,
         redirect_url: null,
-        membership: 0,
-        app_id: null,
-        verified: null,
-        verifiedby: null,
-        status: null,
+        // membership: 0,
+        // app_id: null,
+        // verified: null,
+        // verifiedby: null,
+        // status: null,
         modified: new Date(),
-        createdby: dto.changesMadeBy,
+        createdby: userId,
         modifiedby: null,
         wrapper: null,
         logo: null,
-        wrapper_small: null,
-        host: null,
-        hotel_id: null,
-        punchline: null,
+        // wrapper_small: null,
+        // host: null,
+        // hotel_id: null,
+        // punchline: null,
         validation: 0,
-        onboard_date: null,
+        // onboard_date: null,
         concurrent: 0,
-        duplicate: null,
-        badge_initial_id: null,
+        // duplicate: null,
+        // badge_initial_id: null,
         tags: null,
         score: 0,
-        hotel_id2: null,
-        ios_url: null,
-        android_url: null,
+        // hotel_id2: null,
+        // ios_url: null,
+        // android_url: null,
         brand_id: null,
-        zh_published: false,
-        functionality: functionality,
+        // zh_published: false,
+        functionality: dto.visibility || 'draft',
         multi_city: 0,
-        remark: null,
-        group_id: null,
+        // remark: null,
+        // group_id: null,
         sub_event_type: subEventType,
-        online_event: dto.online_event || null,
+        // online_event: dto.online_event || null,
         event_audience: eventTypeValidation.eventAudience?.toString() || null,
       },
     });
@@ -2779,9 +3154,7 @@ export class EventService {
   ) {
     let eventUrl = `event/${eventId}`;
     
-    if (dto.functionality === 'open' && dto.from === 'manage') {
-      eventUrl = `event/${eventId}`;
-    }
+    eventUrl = `event/${eventId}`;
 
     await prisma.event.update({
       where: { id: eventId },
@@ -2794,16 +3167,18 @@ export class EventService {
 
   private async createCategoryAssociations(
     eventId: number,
-    categories: number[],
+    validatedCategoryData: any, 
     userId: number,
     prisma: any
   ) {
     try {
-      await prisma.event_category.deleteMany({
-        where: { event: eventId },
-      });
+      if (!validatedCategoryData || !validatedCategoryData.categoryIds) {
+        return; 
+      }
 
-      for (const categoryId of categories) {
+      const categoryIds = validatedCategoryData.categoryIds;
+
+      for (const categoryId of categoryIds) {
         await prisma.event_category.upsert({
           where: {
             event_category: {
@@ -2832,59 +3207,60 @@ export class EventService {
     eventId: number,
     editionId: number,
     dto: CreateEventRequestDto,
+    userId: number,
     prisma: any
   ) {
     try {
       const eventDataEntries: Array<{ dataType: string; title: string; value: string }> = [];
 
-      if (dto.description) {
-        eventDataEntries.push({
-          dataType: 'TEXT',
-          title: 'desc',
-          value: dto.description,
-        });
-      }
+      // if (dto.description) {
+      //   eventDataEntries.push({
+      //     dataType: 'TEXT',
+      //     title: 'desc',
+      //     value: dto.description,
+      //   });
+      // }
 
-      if (dto.short_desc) {
-        eventDataEntries.push({
-          dataType: 'TEXT',
-          title: 'short_desc',
-          value: dto.short_desc,
-        });
-      }
+      // if (dto.short_desc) {
+      //   eventDataEntries.push({
+      //     dataType: 'TEXT',
+      //     title: 'short_desc',
+      //     value: dto.short_desc,
+      //   });
+      // }
 
-      if (dto.og_image) {
-        eventDataEntries.push({
-          dataType: 'ATTACHMENT',
-          title: 'event_og_image',
-          value: dto.og_image,
-        });
-      }
+      // if (dto.og_image) {
+      //   eventDataEntries.push({
+      //     dataType: 'ATTACHMENT',
+      //     title: 'event_og_image',
+      //     value: dto.og_image,
+      //   });
+      // }
 
-      eventDataEntries.push({
-        dataType: 'Bool',
-        title: 'year_block',
-        value: dto.yearBlock ? '1' : '0',
-      });
+      // eventDataEntries.push({
+      //   dataType: 'Bool',
+      //   title: 'year_block',
+      //   value: dto.yearBlock ? '1' : '0',
+      // });
 
-      eventDataEntries.push({
-        dataType: 'Bool',
-        title: 'intro_block',
-        value: dto.introBlock ? '1' : '0',
-      });
+      // eventDataEntries.push({
+      //   dataType: 'Bool',
+      //   title: 'intro_block',
+      //   value: dto.introBlock ? '1' : '0',
+      // });
 
-      if (dto.customization) {
-        const processedCustomization = await this.processCustomizationData(
-          dto.customization, 
-          eventId
-        );
+      // if (dto.customization) {
+      //   const processedCustomization = await this.processCustomizationData(
+      //     dto.customization, 
+      //     eventId
+      //   );
         
-        eventDataEntries.push({
-          dataType: 'JSON',
-          title: 'customization',
-          value: processedCustomization,
-        });
-      }
+      //   eventDataEntries.push({
+      //     dataType: 'JSON',
+      //     title: 'customization',
+      //     value: processedCustomization,
+      //   });
+      // }
 
       for (const entry of eventDataEntries) {
         await prisma.event_data.create({
@@ -2895,7 +3271,7 @@ export class EventService {
             title: entry.title,
             value: entry.value,
             published: true,
-            createdby: dto.changesMadeBy,
+            createdby: userId,
             created: new Date(),
           },
         });
@@ -2945,42 +3321,37 @@ export class EventService {
     }
   }
 
-  private async createUserEventMapping(eventId: number, dto: CreateEventRequestDto, prisma: any) {
-  if (dto.fromDashboard === 1) {
-    await prisma.user_event_mapping.upsert({
-      where: {
-        event_userEvent: {
-          event: dto.mainEvent || eventId,
-          userEvent: dto.mainEvent ? eventId : undefined,
-        }
-      },
-      update: { published: dto.publish ?? 1 },
-      create: {
-        event: dto.mainEvent || eventId,
-        userEvent: dto.mainEvent ? eventId : undefined,
-        published: dto.publish ?? 1,
-        created: new Date(),
-        createdBy: dto.changesMadeBy,
-      },
-    });
-  }
-}
-
-  private async createEventSettings(eventId: number, dto: CreateEventRequestDto, prisma: any) {
-    if (dto.fromDashboard === 1 && 
-        (dto.autoApproval !== undefined || dto.regStartDate || dto.regEndDate || dto.capacity)) {
-      
-      await prisma.event_settings.create({
-        data: {
-          event_id: eventId,
-          user_id: dto.changesMadeBy,
-          auto_approval: dto.autoApproval ?? 0,
-          reg_start_date: dto.regStartDate ? new Date(dto.regStartDate) : null,
-          reg_end_date: dto.regEndDate ? new Date(dto.regEndDate) : null,
-          capacity: dto.capacity ?? null,
-          created: new Date(),
+  private async createUserEventMapping(eventId: number, dto: CreateEventRequestDto, mainEventData: any, userId: number, prisma: any) {
+    try {
+      const existingMapping = await prisma.user_event_mapping.findFirst({
+        where: {
+          event: mainEventData?.event?.id || eventId, // Use main event ID if provided
+          user_event: mainEventData?.event ? eventId : null, // Set user_event only if main event exists
         }
       });
+
+      if (existingMapping) {
+        await prisma.user_event_mapping.update({
+          where: { id: existingMapping.id },
+          data: { 
+            published: 1,
+            modified: new Date(),
+            modified_by: userId,
+          }
+        });
+      } else {
+        await prisma.user_event_mapping.create({
+          data: {
+            event: mainEventData?.event?.id || eventId, // Main event ID or current event ID
+            user_event: mainEventData?.event ? eventId : null, // Sub-event ID if main event exists
+            published:  1,
+            created: new Date(),
+            created_by: userId,
+          }
+        });
+      }
+    } catch (error) {
+      this.logger.error('User event mapping error:', error);
     }
   }
 
@@ -3012,45 +3383,89 @@ export class EventService {
   }
 
   private async createEventTypeAssociations(
-    eventId: number,
-    type: string,
-    typeVal: string | undefined,
-    userId: number,
+    eventId: number, 
+    eventTypes: number[], 
+    userId: number, 
     prisma: any
-  ) {
-    try {
-      const eventTypes = this.mapEventTypeToArray(type, typeVal);
+  ): Promise<void> {
+    this.logger.debug(`Creating event type associations for event ${eventId}:`, eventTypes);
+    
+    if (!eventTypes || eventTypes.length === 0) {
+      this.logger.warn(`No event types provided for event ${eventId}`);
+      return;
+    }
 
-      for (const eventTypeId of eventTypes) {
+    try {
+      for (const typeId of eventTypes) {
+        this.logger.debug(`Processing event type ${typeId} for event ${eventId}`);
+        
+        // Validate that the type ID exists
         const eventType = await prisma.event_type.findUnique({
-          where: { id: eventTypeId },
+          where: { id: typeId },
+          select: { id: true, parent_id: true, name: true }
         });
 
-        if (eventType) {
-          await prisma.event_type_event.upsert({
-            where: {
-              eventtype_id_event_id: {  
-                eventtype_id: eventTypeId,
-                event_id: eventId,
+        if (!eventType) {
+          this.logger.warn(`Event type ${typeId} not found in database`);
+          continue;
+        }
+
+        this.logger.debug(`Found event type: ${eventType.name} (${typeId})`);
+
+        const typesToCreate = [typeId];
+        if (eventType.parent_id) {
+          const parentIds = eventType.parent_id.split(',').map(id => parseInt(id.trim())).filter(Boolean);
+          typesToCreate.push(...parentIds);
+          this.logger.debug(`Adding parent types: ${parentIds}`);
+        }
+
+        // Create event_type_event records
+        for (const typeToCreate of typesToCreate) {
+          try {
+            // FIXED: Use correct unique constraint name based on your schema
+            const result = await prisma.event_type_event.upsert({
+              where: {
+                eventtype_id: { // This should match your actual unique constraint
+                  eventtype_id: typeToCreate,
+                  event_id: eventId,
+                }
               },
-            },
-            update: {
-              modified_by: userId,
-              modified: new Date(),
-            },
-            create: {
-              eventtype_id: eventTypeId,
-              event_id: eventId,
-              created_by: userId,
-              created: new Date(),
-              modified: new Date(),
-              published: 1,
-            },
-          });
+              update: {
+                modified: new Date(),
+                modified_by: userId,
+              },
+              create: {
+                eventtype_id: typeToCreate,
+                event_id: eventId,
+                published: 1,
+                created_by: userId,
+              }
+            });
+            
+            this.logger.debug(`Created/updated event_type_event: ${typeToCreate} -> ${eventId}`);
+          } catch (error) {
+            // If upsert fails, try direct create (in case unique constraint is different)
+            try {
+              await prisma.event_type_event.create({
+                data: {
+                  eventtype_id: typeToCreate,
+                  event_id: eventId,
+                  published: 1,
+                  created_by: userId,
+                }
+              });
+              this.logger.debug(`Created event_type_event: ${typeToCreate} -> ${eventId}`);
+            } catch (createError) {
+              this.logger.error(`Failed to create event_type_event for type ${typeToCreate}:`, createError);
+            }
+          }
         }
       }
+
+      this.logger.log(`Event type associations completed for event ${eventId}`);
     } catch (error) {
-      this.logger.error('Event type association error:', error);
+      this.logger.error(`Failed to create event type associations for event ${eventId}:`, error);
+      throw error;
     }
   }
 

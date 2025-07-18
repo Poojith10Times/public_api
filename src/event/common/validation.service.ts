@@ -78,35 +78,6 @@ export class ValidationService {
     }
   }
 
-  async validateMainEvent(mainEventId: number): Promise<{
-    isValid: boolean;
-    event?: any;
-    message?: string;
-  }> {
-    try {
-      const event = await this.prisma.event.findUnique({
-        where: { id: mainEventId },
-      });
-
-      if (!event) {
-        return {
-          isValid: false,
-          message: 'Invalid main event',
-        };
-      }
-
-      return {
-        isValid: true,
-        event,
-      };
-    } catch (error) {
-      return {
-        isValid: false,
-        message: 'Error validating main event',
-      };
-    }
-  }
-
   async validateEventType(inputEventType: number[]): Promise<{
     isValid: boolean;
     eventAudience?: string;
@@ -231,53 +202,15 @@ export class ValidationService {
     }
   }
 
-  async validateCompany(companyId: number): Promise<{
-    isValid: boolean;
-    company?: any;
-    message?: string;
-  }> {
-    try {
-      const company = await this.prisma.company.findUnique({
-        where: { id: companyId },
-      });
-
-      if (!company) {
-        return {
-          isValid: false,
-          message: 'Invalid company',
-        };
-      }
-
-      return {
-        isValid: true,
-        company,
-      };
-    } catch (error) {
-      return {
-        isValid: false,
-        message: 'Company validation failed',
-      };
-    }
-  }
-
-  /**
-   * Validate venue exists
-   */
   async validateVenue(venueId: number): Promise<{
     isValid: boolean;
     venue?: any;
     message?: string;
   }> {
     try {
+      // First, get the venue
       const venue = await this.prisma.venue.findUnique({
-        where: { id: venueId },
-        include: {
-          city_venue_cityTocity: {
-            include: {
-              area_values: true
-            }
-          }
-        }
+        where: { id: venueId }
       });
 
       if (!venue) {
@@ -287,11 +220,45 @@ export class ValidationService {
         };
       }
 
+      // Then get the city and country separately
+      let city: any = null;
+      let country: any = null;
+
+      if (venue.city) {
+        city = await this.prisma.city.findUnique({
+          where: { id: venue.city },
+          include: {
+            area_values: true
+          }
+        });
+      }
+
+      if (venue.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: venue.country }
+        });
+      }
+
+      // If no country from venue, try to get it from city
+      if (!country && city && city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach the relationships manually
+      const venueWithRelations = {
+        ...venue,
+        city_venue_cityTocity: city,
+        country_venue_countryTocountry: country
+      };
+
       return {
         isValid: true,
-        venue,
+        venue: venueWithRelations,
       };
     } catch (error) {
+      console.error('Venue validation error:', error);
       return {
         isValid: false,
         message: 'Venue validation failed',
@@ -299,9 +266,6 @@ export class ValidationService {
     }
   }
 
-  /**
-   * Validate city exists
-   */
   async validateCity(cityId: number): Promise<{
     isValid: boolean;
     city?: any;
@@ -311,7 +275,7 @@ export class ValidationService {
       const city = await this.prisma.city.findUnique({
         where: { id: cityId },
         include: {
-          area_values: true 
+          area_values: true
         }
       });
 
@@ -322,11 +286,26 @@ export class ValidationService {
         };
       }
 
+      // Get country separately
+      let country: any = null;
+      if (city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach country relationship
+      const cityWithCountry = {
+        ...city,
+        country_city_countryTocountry: country
+      };
+
       return {
         isValid: true,
-        city,
+        city: cityWithCountry,
       };
     } catch (error) {
+      console.error('City validation error:', error);
       return {
         isValid: false,
         message: 'City validation failed',
@@ -513,9 +492,6 @@ export class ValidationService {
     }
   }
 
-  /**
-   * Validate website format
-   */
   validateWebsiteFormat(url: string): boolean {
     if (!url || url === '') return true;
     
@@ -531,9 +507,6 @@ export class ValidationService {
     }
   }
 
-  /**
-   * Validate URL uniqueness
-   */
   async validateUrlUniqueness(url: string, excludeEventId?: number): Promise<{
     isValid: boolean;
     message?: string;
@@ -557,5 +530,718 @@ export class ValidationService {
         message: 'URL validation failed',
       };
     }
+  }
+
+  async resolveCityByUrl(cityUrl: string): Promise<{
+    isValid: boolean;
+    city?: any;
+    message?: string;
+  }> {
+    try {
+      const city = await this.prisma.city.findUnique({
+        where: {
+          url: cityUrl
+        },
+        include: {
+          area_values: true
+        }
+      });
+
+      if (!city) {
+        return {
+          isValid: false,
+          message: `City with URL "${cityUrl}" not found`
+        };
+      }
+
+      // Get country separately
+      let country: any = null;
+      if (city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach country relationship
+      const cityWithCountry = {
+        ...city,
+        country_city_countryTocountry: country
+      };
+
+      return {
+        isValid: true,
+        city: cityWithCountry
+      };
+    } catch (error) {
+      console.error('City resolution error:', error);
+      return {
+        isValid: false,
+        message: 'City resolution failed'
+      };
+    }
+  }
+
+  async resolveCountryByUrl(countryUrl: string): Promise<{
+    isValid: boolean;
+    country?: any;
+    message?: string;
+  }> {
+    try {
+      const country = await this.prisma.country.findUnique({
+        where: {
+          url: countryUrl
+        }
+      });
+
+      if (!country) {
+        return {
+          isValid: false,
+          message: `Country with URL "${countryUrl}" not found`
+        };
+      }
+
+      return {
+        isValid: true,
+        country
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Country resolution failed'
+      };
+    }
+  }
+
+  async resolveVenueByUrl(venueUrl: string): Promise<{
+    isValid: boolean;
+    venue?: any;
+    message?: string;
+  }> {
+    try {
+      // First, get the venue
+      const venue = await this.prisma.venue.findUnique({
+        where: {
+          url: venueUrl
+        }
+      });
+
+      if (!venue) {
+        return {
+          isValid: false,
+          message: `Venue with URL "${venueUrl}" not found`
+        };
+      }
+
+      // Then get the city and country separately
+      let city: any = null;
+      let country: any = null;
+
+      if (venue.city) {
+        city = await this.prisma.city.findUnique({
+          where: { id: venue.city },
+          include: {
+            area_values: true
+          }
+        });
+      }
+
+      if (venue.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: venue.country }
+        });
+      }
+
+      // If no country from venue, try to get it from city
+      if (!country && city && city.country) {
+        country = await this.prisma.country.findUnique({
+          where: { id: city.country }
+        });
+      }
+
+      // Attach the relationships manually
+      const venueWithRelations = {
+        ...venue,
+        city_venue_cityTocity: city,
+        country_venue_countryTocountry: country
+      };
+
+      return {
+        isValid: true,
+        venue: venueWithRelations
+      };
+    } catch (error) {
+      console.error('Venue resolution error:', error);
+      return {
+        isValid: false,
+        message: 'Venue resolution failed'
+      };
+    }
+  }
+
+  async resolveCompanyByUrl(companyUrl: string): Promise<{
+    isValid: boolean;
+    company?: any;
+    message?: string;
+    }> {
+    try {
+      const company = await this.prisma.company.findUnique({
+        where: {
+          url: companyUrl
+        }
+      });
+
+      if (!company) {
+        return {
+          isValid: false,
+          message: `Company with URL "${companyUrl}" not found`
+        };
+      }
+
+      return {
+        isValid: true,
+        company
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Company resolution failed'
+      };
+    }
+  }
+
+  async validateCompany(companyInput: number | string): Promise<{
+    isValid: boolean;
+    company?: any;
+    message?: string;
+  }> {
+    try {
+      let company;
+
+      if (typeof companyInput === 'string') {
+        // Handle URL resolution
+        return await this.resolveCompanyByUrl(companyInput);
+      } else {
+        // Handle numeric ID (existing logic)
+        company = await this.prisma.company.findUnique({
+          where: { id: companyInput },
+        });
+
+        if (!company) {
+          return {
+            isValid: false,
+            message: 'Invalid company',
+          };
+        }
+      }
+
+      return {
+        isValid: true,
+        company,
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Company validation failed',
+      };
+    }
+  }
+
+  async resolveCategoriesByUrl(categoryUrls: string[]): Promise<{
+    isValid: boolean;
+    categories?: any[];
+    categoryIds?: number[];
+    message?: string;
+  }> {
+    try {
+      if (categoryUrls.length > 2) {
+        return {
+          isValid: false,
+          message: 'Select at most 2 categories'
+        };
+      }
+
+      const resolvedCategories: any[] = [];
+      const notFoundCategories: string[] = [];
+
+      for (const categoryUrl of categoryUrls) {
+        const category = await this.prisma.category.findUnique({
+          where: {
+            url: categoryUrl,
+            is_group: true
+          }
+        });
+
+        if (category) {
+          resolvedCategories.push(category);
+        } else {
+          notFoundCategories.push(categoryUrl);
+        }
+      }
+
+      if (notFoundCategories.length > 0) {
+        return {
+          isValid: false,
+          message: `Categories with URLs not found: ${notFoundCategories.join(', ')}`
+        };
+      }
+
+      return {
+        isValid: true,
+        categories: resolvedCategories,
+        categoryIds: resolvedCategories.map(c => c.id)
+      };
+
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Category resolution failed'
+      };
+    }
+  }
+
+  async validateEventTypesWithUrl(typeInputs: string[]): Promise<{
+    isValid: boolean;
+    eventAudience?: string;
+    eventType?: number; // Primary event type
+    subEventType?: number | null;
+    eventTypeArray?: number[];
+    message?: string;
+  }> {
+    try {
+      if (typeInputs.length === 0) {
+        return {
+          isValid: false,
+          message: 'At least one event type is required'
+        };
+      }
+
+      if (typeInputs.length > 10) {
+        return {
+          isValid: false,
+          message: 'Select at most 10 event types'
+        };
+      }
+
+      const resolvedTypes: number[] = [];
+      const notFoundTypes: string[] = [];
+
+      // Resolve each URL to event type ID
+      for (const typeUrl of typeInputs) {
+        const urlResult = await this.resolveEventTypeByUrl(typeUrl);
+        
+        if (urlResult.isValid && urlResult.eventType) {
+          resolvedTypes.push(urlResult.eventType.id);
+        } else {
+          notFoundTypes.push(typeUrl);
+        }
+      }
+
+      if (notFoundTypes.length > 0) {
+        return {
+          isValid: false,
+          message: `Event types with URLs not found: ${notFoundTypes.join(', ')}`
+        };
+      }
+
+      // Remove duplicates
+      const uniqueResolvedTypes = [...new Set(resolvedTypes)];
+
+      // Validate the resolved event types using existing logic
+      const typeValidation = await this.validateEventType(uniqueResolvedTypes);
+      if (!typeValidation.isValid) {
+        return {
+          isValid: false,
+          message: typeValidation.message
+        };
+      }
+
+      // Handle special cases (meetup = workshop + sub_event_type = 1)
+      let subEventType: number | null = null;
+      if (typeInputs.includes('meetup')) {
+        subEventType = 1;
+      }
+
+      return {
+        isValid: true,
+        eventAudience: typeValidation.eventAudience,
+        eventType: uniqueResolvedTypes[0], 
+        subEventType,
+        eventTypeArray: uniqueResolvedTypes
+      };
+
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Event type validation failed'
+      };
+    }
+  }
+
+  async resolveEventTypeByUrl(eventTypeUrl: string): Promise<{
+    isValid: boolean;
+    eventType?: any;
+    eventTypeId?: number;
+    message?: string;
+  }> {
+    try {
+      const eventType = await this.prisma.event_type.findFirst({
+        where: {
+          url: eventTypeUrl
+        }
+      });
+
+      if (!eventType) {
+        return {
+          isValid: false,
+          message: `Event type with URL "${eventTypeUrl}" not found`
+        };
+      }
+
+      return {
+        isValid: true,
+        eventType,
+        eventTypeId: eventType.id
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Event type resolution failed'
+      };
+    }
+  }
+
+
+  // user upsert auth validation
+ async validateUserAuthorization(userId: number, eventId: number): Promise<{
+    isValid: boolean;
+    authType?: string;
+    message?: string;
+  }> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true, published: true }
+      });
+
+      if (!user || !user.published) {
+        return {
+          isValid: false,
+          message: 'User not found or inactive'
+        };
+      }
+
+      if (user.email?.toLowerCase() === 'eva@10times.com') {
+        return {
+          isValid: true,
+          authType: 'eva_access'
+        };
+      }
+
+      // Step 3: Check event POC (entity_type=1)
+      const eventPOC = await this.prisma.contact.findFirst({
+        where: {
+          entity_type: 1,
+          entity_id: eventId,
+          user_reference: userId,
+          published: 1
+        }
+      });
+
+      if (eventPOC) {
+        return {
+          isValid: true,
+          authType: 'event_poc'
+        };
+      }
+
+      // Step 4: Check company POC (entity_type=2) 
+      const eventWithCompany = await this.prisma.event.findUnique({
+        where: { id: eventId },
+        select: {
+          event_edition_event_event_editionToevent_edition: {
+            select: { company_id: true }
+          }
+        }
+      });
+
+      const companyId = eventWithCompany?.event_edition_event_event_editionToevent_edition?.company_id;
+      
+      if (companyId) {
+        const companyPOC = await this.prisma.contact.findFirst({
+          where: {
+            entity_type: 2,
+            entity_id: companyId,
+            user_reference: userId,
+            published: 1
+          }
+        });
+
+        if (companyPOC) {
+          return {
+            isValid: true,
+            authType: 'company_poc'
+          };
+        }
+      }
+
+      // Step 5: No authorization found
+      return {
+        isValid: false,
+        message: 'Not authorized to change the event details'
+      };
+
+    } catch (error) {
+      console.error('POC authorization validation error:', error);
+      return {
+        isValid: false,
+        message: 'Authorization check failed'
+      };
+    }
+  }
+
+  private extractEmailDomain(email: string): string | null {
+    try {
+      const match = email.match(/^[^\s@]+@([^\s@]+\.[^\s@]+)$/);
+      return match ? match[1].toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async resolveMainEventByUrl(mainEventUrl: string): Promise<{
+    isValid: boolean;
+    event?: any;
+    message?: string;
+  }> {
+    try {
+      const mainEvent = await this.prisma.event.findUnique({
+        where: {
+          url: mainEventUrl,
+          published: { not: null } // Ensure event is published
+        }
+      });
+
+      if (!mainEvent) {
+        return {
+          isValid: false,
+          message: `Main event with URL "${mainEventUrl}" not found`
+        };
+      }
+
+      return {
+        isValid: true,
+        event: mainEvent
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Main event resolution failed'
+      };
+    }
+  }
+
+  async validateMainEvent(mainEventInput: number | string): Promise<{
+    isValid: boolean;
+    event?: any;
+    message?: string;
+  }> {
+    try {
+      let mainEvent;
+
+      if (typeof mainEventInput === 'string') {
+        // Handle URL resolution
+        return await this.resolveMainEventByUrl(mainEventInput);
+      } else {
+        // Handle numeric ID (existing logic for backward compatibility)
+        mainEvent = await this.prisma.event.findUnique({
+          where: { id: mainEventInput },
+        });
+
+        if (!mainEvent) {
+          return {
+            isValid: false,
+            message: 'Invalid main event',
+          };
+        }
+      }
+
+      return {
+        isValid: true,
+        event: mainEvent,
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Error validating main event',
+      };
+    }
+  }
+
+  validateEventSettings(settingsData: string): {
+    isValid: boolean;
+    settings?: any;
+    message?: string;
+    softError?: string;
+  } {
+    try {
+      if (!settingsData || settingsData.trim() === '') {
+        return { isValid: true };
+      }
+
+      let settings;
+      try {
+        settings = JSON.parse(settingsData);
+      } catch (parseError) {
+        return { 
+          isValid: false, 
+          message: 'Invalid JSON format in eventSettings' 
+        };
+      }
+
+      if (typeof settings !== 'object' || settings === null) {
+        return { 
+          isValid: false, 
+          message: 'eventSettings must be an object' 
+        };
+      }
+
+      const allowedKeys = ['autoApproval', 'regStartDate', 'regEndDate', 'capacity'];
+      const providedKeys = Object.keys(settings);
+      const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+      
+      if (invalidKeys.length > 0) {
+        return { 
+          isValid: false, 
+          message: `Invalid keys in eventSettings: ${invalidKeys.join(', ')}. Allowed keys: ${allowedKeys.join(', ')}` 
+        };
+      }
+
+      // Validate autoApproval
+      if (settings.autoApproval !== undefined && ![0, 1].includes(settings.autoApproval)) {
+        return { 
+          isValid: false, 
+          message: 'autoApproval must be 0 or 1' 
+        };
+      }
+
+      // Validate date formats and logic
+      if (settings.regStartDate && !this.isValidDate(settings.regStartDate)) {
+        return { 
+          isValid: false, 
+          message: 'regStartDate must be in YYYY-MM-DD format' 
+        };
+      }
+
+      if (settings.regEndDate && !this.isValidDate(settings.regEndDate)) {
+        return { 
+          isValid: false, 
+          message: 'regEndDate must be in YYYY-MM-DD format' 
+        };
+      }
+
+      // Validate date logic
+      if (settings.regStartDate && settings.regEndDate) {
+        const startDate = new Date(settings.regStartDate);
+        const endDate = new Date(settings.regEndDate);
+        
+        if (startDate >= endDate) {
+          return { 
+            isValid: false, 
+            message: 'regStartDate must be before regEndDate' 
+          };
+        }
+      }
+
+      // Validate capacity
+      if (settings.capacity !== undefined) {
+        if (!Number.isInteger(settings.capacity) || settings.capacity < 0) {
+          return { 
+            isValid: false, 
+            message: 'capacity must be a non-negative integer' 
+          };
+        }
+      }
+
+      return { 
+        isValid: true, 
+        settings
+      };
+
+    } catch (error) {
+      return { 
+        isValid: false, 
+        message: 'Event settings validation failed' 
+      };
+    }
+  }
+
+  private isValidDate(dateString: string): boolean {
+    const regex = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/;
+    if (!regex.test(dateString)) {
+      return false;
+    }
+    
+    const date = new Date(dateString);
+    return date instanceof Date && !isNaN(date.getTime());
+  }
+
+  async validateSalesActionBy(userId: number): Promise<{
+    isValid: boolean;
+    user?: any;
+    message?: string;
+  }> {
+    try {
+      const user = await this.prisma.user.findFirst({
+        where: {
+          id: userId,
+          published: true,
+        },
+      });
+
+      if (!user) {
+        return {
+          isValid: false,
+          message: 'No user exist for the given salesActionBy id',
+        };
+      }
+
+      return {
+        isValid: true,
+        user,
+      };
+    } catch (error) {
+      return {
+        isValid: false,
+        message: 'Error validating salesActionBy user',
+      };
+    }
+  }
+
+  validateSalesAction(salesAction: string): {
+    isValid: boolean;
+    message?: string;
+  } {
+    if (!salesAction || salesAction === '') {
+      return { isValid: true };
+    }
+
+    const datetimeRegex = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])( ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9])?$/;
+    
+    if (!datetimeRegex.test(salesAction)) {
+      return {
+        isValid: false,
+        message: 'please give date in valid format :YYYY-MM-DD or YYYY-MM-DD HH:mm:ss',
+      };
+    }
+
+    const date = new Date(salesAction);
+    if (isNaN(date.getTime())) {
+      return {
+        isValid: false,
+        message: 'Invalid date value in salesAction',
+      };
+    }
+
+    return { isValid: true };
   }
 }

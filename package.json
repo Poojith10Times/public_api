@@ -37,6 +37,7 @@
     "bcryptjs": "^3.0.2",
     "ioredis": "^5.6.1",
     "jsonwebtoken": "^9.0.2",
+    "libphonenumber-js": "^1.12.9",
     "mysql2": "^3.14.1",
     "nestjs-zod": "^4.3.1",
     "passport": "^0.7.0",

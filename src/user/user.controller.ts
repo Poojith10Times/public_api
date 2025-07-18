@@ -1,15 +1,19 @@
-// import { Controller, Get, UseGuards, Request } from '@nestjs/common';
-// import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-// import { UserService } from './user.service';
-// import { UserResponseDto } from './dto/user.dto';
+import { Controller, Post, Body, HttpStatus, HttpCode } from '@nestjs/common';
+import { UserService } from './services/user.service';
+import { UserUpsertRequestDto } from './dto/user-upsert-request.dto';
+import { UserUpsertResponseDto } from './dto/user-upsert-response.dto';
+import { ApiTags } from '@nestjs/swagger';
 
-// @Controller('user')
-// export class UserController {
-//   constructor(private userService: UserService) {}
+@ApiTags('User API')
+@Controller('v1/user')
+export class UserController {
+  constructor(
+    private readonly userService: UserService,
+  ) {}
 
-//   @Get('profile')
-//   @UseGuards(JwtAuthGuard)
-//   async getProfile(@Request() req): Promise<UserResponseDto> {
-//     return this.userService.findById(req.user.id);
-//   }
-// }
+  @Post('upsert')
+  @HttpCode(HttpStatus.OK)
+  async upsertUser(@Body() userData: UserUpsertRequestDto): Promise<UserUpsertResponseDto> {
+    return this.userService.upsertUser(userData);
+  }
+}

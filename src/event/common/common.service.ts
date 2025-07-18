@@ -257,35 +257,7 @@ export class CommonService {
     }
   }
 
-  // // Process base64 image and upload 
-  // private async processBase64Image(
-  //   base64Data: string,
-  //   eventId: number,
-  //   type: string
-  // ): Promise<string | null> {
-  //   try {
-  //     // Extract image data
-  //     const matches = base64Data.match(/^data:image\/([a-zA-Z]*);base64,(.+)$/);
-  //     if (!matches || matches.length !== 3) {
-  //       return null;
-  //     }
 
-  //     const imageType = matches[1];
-  //     const imageData = matches[2];
-      
-  //     // Need to implement:
-  //     // 1. Decode base64 to buffer
-  //     // 2. Upload to S3/CDN
-  //     // 3. Return the CDN URL
-      
-  //     const fileName = `${eventId}_${type}_${Date.now()}.${imageType}`;
-  //     const cdnUrl = `https://cdn.10times.com/uploads/${fileName}`;
-      
-  //     return cdnUrl;
-  //   } catch (error) {
-  //     return null;
-  //   }
-  // }
 
   // Process other attachments (brochure, og_image, etc.)
   async processAttachment(
@@ -387,16 +359,15 @@ export class CommonService {
   async validateContactEmails(
     contacts: ContactData[],
     restrictionLevel: string = 'vendor'
-  ): Promise<{ valid: boolean; message?: string }> {
+  ): Promise<{ valid: boolean; message?: string; blacklistedEmails?: string[] }> {
     try {
       const emails = contacts.map(contact => contact.email);
+      const domains = emails.map(email => email.split('@')[1]);
 
       // Check domain blacklist
       const blacklistedDomains = await this.prisma.blacklist_domains.findMany({
         where: {
-          domain: {
-            in: emails.map(email => email.split('@')[1])
-          }
+          domain: { in: domains }
         }
       });
 
@@ -407,7 +378,8 @@ export class CommonService {
 
         return {
           valid: false,
-          message: `Sorry, ${blacklistedEmails.join(', ')} is not allowed.`
+          message: `Sorry, ${blacklistedEmails.join(', ')} is not allowed.`,
+          blacklistedEmails
         };
       }
 
@@ -427,7 +399,6 @@ export class CommonService {
       const contacts: ContactData[] = JSON.parse(contactsData);
       const pipedriveData: Array<{ userId: number; companyId: number }> = [];
 
-      // Get event with edition and company info
       const event = await this.prisma.event.findUnique({
         where: { id: eventId },
         include: {
@@ -1196,15 +1167,24 @@ export class CommonService {
     eventId: number,
     editionId: number,
     productData: string,
-    userId: number
+    userId: number,
+    prisma?: any
   ): Promise<{ categoryIds: number[]; softError?: string }> {
+    const db = prisma || this.prisma;
+    
     try {
-      const products = JSON.parse(productData);
+      let products;
+      try {
+        products = JSON.parse(productData);
+      } catch (parseError) {
+        throw new Error('Invalid JSON format in product data');
+      }
+
       const categoryIds: number[] = [];
       let softError: string | undefined;
 
-      // Get existing products count for validation
-      const existingProducts = await this.prisma.event_products.findMany({
+      // Get existing products and their counts
+      const existingProducts = await db.event_products.findMany({
         where: { event: eventId },
         include: { product_event_products_productToproduct: true }
       });
@@ -1212,8 +1192,8 @@ export class CommonService {
       let publishedCount = existingProducts.filter(p => p.published === 1).length;
       let unpublishedCount = existingProducts.filter(p => p.published === 0).length;
 
-      // Mark all existing products as unpublished first
-      await this.prisma.event_products.updateMany({
+      // Set all existing products to unpublished first
+      await db.event_products.updateMany({
         where: { event: eventId },
         data: { published: 0 }
       });
@@ -1224,13 +1204,13 @@ export class CommonService {
         // Validate product limits
         if (publishedStatus === '1') {
           if (publishedCount >= 10) {
-            softError = "Not able to add more than 10 product";
+            softError = "Not able to add more than 10 published products";
             continue;
           }
           publishedCount++;
         } else if (publishedStatus === '0') {
           if (unpublishedCount >= 4) {
-            softError = 'Not able to add more than 4 unpublished product';
+            softError = 'Not able to add more than 4 unpublished products';
             continue;
           }
           unpublishedCount++;
@@ -1239,19 +1219,18 @@ export class CommonService {
         // Find or create product
         let product;
         if (this.isNumeric(productKey)) {
-          product = await this.prisma.product.findUnique({
+          product = await db.product.findUnique({
             where: { id: parseInt(productKey) },
             include: { category_product_categoryTocategory: true }
           });
         } else {
-          product = await this.prisma.product.findFirst({
+          product = await db.product.findFirst({
             where: { name: productKey },
             include: { category_product_categoryTocategory: true }
           });
 
           if (!product && productKey.length <= 50) {
-            // Create new product
-            product = await this.prisma.product.create({
+            product = await db.product.create({
               data: {
                 name: productKey,
                 created_by: userId,
@@ -1265,8 +1244,8 @@ export class CommonService {
         if (product && !uniqueProducts.has(product.id)) {
           uniqueProducts.add(product.id);
 
-          // Create or update event product
-          const existingEventProduct = await this.prisma.event_products.findFirst({
+          // Upsert event product
+          const existingEventProduct = await db.event_products.findFirst({
             where: {
               event: eventId,
               product: product.id
@@ -1274,7 +1253,7 @@ export class CommonService {
           });
 
           if (existingEventProduct) {
-            await this.prisma.event_products.update({
+            await db.event_products.update({
               where: { id: existingEventProduct.id },
               data: {
                 published: parseInt(publishedStatus as string),
@@ -1284,7 +1263,7 @@ export class CommonService {
               }
             });
           } else {
-            await this.prisma.event_products.create({
+            await db.event_products.create({ 
               data: {
                 event: eventId,
                 edition: editionId,
@@ -1295,28 +1274,32 @@ export class CommonService {
             });
           }
 
-          // Add product category to event categories
+          // Collect category IDs from published products only
           if (product.category_product_categoryTocategory && publishedStatus === '1') {
             categoryIds.push(product.category_product_categoryTocategory.id);
           }
         }
       }
 
+      console.log('Product processing completed. Category IDs:', categoryIds);
       return { categoryIds, softError };
     } catch (error) {
-      throw new Error('Invalid product format');
+      console.error('Product processing error:', error);
+      throw new Error(`Invalid product format: ${error.message}`);
     }
   }
 
   async saveProductCategories(
     eventId: number,
     categoryIds: number[],
-    userId: number
+    userId: number,
+    prisma?: any
   ): Promise<void> {
     if (categoryIds.length === 0) return;
+    const db = prisma || this.prisma; 
 
     // Remove existing product categories (not event categories)
-    const existingProductCategories = await this.prisma.event_products.findMany({
+    const existingProductCategories = await db.event_products.findMany({
       where: { event: eventId },
       include: {
         product_event_products_productToproduct: {
@@ -1330,7 +1313,7 @@ export class CommonService {
       .filter((id): id is number => id !== null && id !== undefined);
 
     if (productCategoryIds.length > 0) {
-      await this.prisma.event_category.deleteMany({
+      await db.event_category.deleteMany({
         where: {
           event: eventId,
           category: { in: productCategoryIds }
@@ -1342,7 +1325,7 @@ export class CommonService {
     const uniqueCategoryIds = [...new Set(categoryIds)];
     
     for (const categoryId of uniqueCategoryIds) {
-      const existingEventCategory = await this.prisma.event_category.findFirst({
+      const existingEventCategory = await db.event_category.findFirst({
         where: {
           event: eventId,
           category: categoryId
@@ -1350,7 +1333,7 @@ export class CommonService {
       });
 
       if (!existingEventCategory) {
-        await this.prisma.event_category.create({
+        await db.event_category.create({
           data: {
             event: eventId,
             category: categoryId,
@@ -1361,19 +1344,23 @@ export class CommonService {
     }
   }
 
+
   async processEventCategories(
     eventId: number,
     categoryIds: number[],
     userId: number,
     verifiedCategories?: string,
-    vendorId?: number
+    vendorId?: number,
+    prisma?: any 
   ): Promise<void> {
-    // STEP 1: Find categories to delete 
+    const db = prisma || this.prisma;
+    
+    // STEP 1: Delete categories that are not in the new list (excluding group categories)
     const categoriesToDeleteQuery = {
       where: {
         event: eventId,
         category_event_category_categoryTocategory: {
-          is_group: false
+          is_group: false  // Only delete non-group categories
         },
         ...(categoryIds.length > 0 && {
           category: {
@@ -1383,15 +1370,13 @@ export class CommonService {
       }
     };
 
-    // Get the IDs first, then delete
-    const categoriesToDelete = await this.prisma.event_category.findMany({
+    const categoriesToDelete = await db.event_category.findMany({
       ...categoriesToDeleteQuery,
       select: { id: true }
     });
 
-    // STEP 2: Delete the found categories
     if (categoriesToDelete.length > 0) {
-      await this.prisma.event_category.deleteMany({
+      await db.event_category.deleteMany({
         where: {
           id: {
             in: categoriesToDelete.map(c => c.id)
@@ -1400,7 +1385,7 @@ export class CommonService {
       });
     }
 
-    // STEP 3: Parse verified categories
+    // STEP 2: Parse verified categories
     let verifiedCategoryIds: number[] = [];
     if (verifiedCategories) {
       try {
@@ -1410,9 +1395,9 @@ export class CommonService {
       }
     }
 
-    // STEP 4: Add new categories
+    // STEP 3: Add/update new categories
     for (const categoryId of categoryIds) {
-      const existingEventCategory = await this.prisma.event_category.findFirst({
+      const existingEventCategory = await db.event_category.findFirst({
         where: {
           event: eventId,
           category: categoryId
@@ -1431,7 +1416,7 @@ export class CommonService {
           updateData.verified_on = new Date();
         }
 
-        await this.prisma.event_category.update({
+        await db.event_category.update({
           where: { id: existingEventCategory.id },
           data: updateData
         });
@@ -1448,32 +1433,37 @@ export class CommonService {
           createData.verified_on = new Date();
         }
 
-        await this.prisma.event_category.create({
+        await db.event_category.create({
           data: createData
         });
       }
     }
   }
-
-  // private isNumeric(value: string): boolean {
-  //   return !isNaN(Number(value)) && !isNaN(parseFloat(value));
-  // }
   
-  async processEventStats(
-    eventId: number,
-    editionId: number,
-    statsData: any,
-    userId: number
-  ): Promise<{ valid: boolean; message?: string }> {
-    try {
-      let statsStructure = await this.getOrCreateStatsStructure(eventId, editionId);
-      let hasChanges = false;
+async processEventStats(
+  eventId: number,
+  editionId: number,
+  statsData: any,
+  userId: number,
+  prisma?: any
+): Promise<{ valid: boolean; message?: string }> {
+  try {
+    const db = prisma || this.prisma; 
+    let statsStructure = await this.getOrCreateStatsStructure(eventId, editionId, db);
+    let hasChanges = false;
 
-      // Process stats from JSON format
-      if (statsData.stats) {
-        const decodedStats = typeof statsData.stats === 'string' 
-          ? JSON.parse(statsData.stats) 
-          : statsData.stats;
+    // Process stats from JSON format
+    if (typeof statsData === 'string') {
+      try {
+        const decodedStats = JSON.parse(statsData);
+        
+        const allowedKeys = ['visitors', 'exhibitors', 'area'];
+        const providedKeys = Object.keys(decodedStats);
+        const invalidKeys = providedKeys.filter(key => !allowedKeys.includes(key));
+        
+        if (invalidKeys.length > 0) {
+          this.logger.warn(`Invalid keys in stats: ${invalidKeys.join(', ')}`);
+        }
 
         if (decodedStats.visitors !== undefined && decodedStats.visitors !== null && decodedStats.visitors !== '') {
           statsStructure.visitor.total_count = decodedStats.visitors;
@@ -1489,50 +1479,99 @@ export class CommonService {
           statsStructure.area.total_area = decodedStats.area;
           hasChanges = true;
         }
+      } catch (error) {
+        this.logger.error('Failed to parse stats JSON:', error);
+        return { valid: false, message: 'Invalid JSON format in stats' };
       }
-
-      // Process individual visitor/exhibitor fields 
-      if (statsData.eventExhibitors !== undefined && this.isNumeric(statsData.eventExhibitors)) {
-        statsStructure.exhibitor.total_count = statsData.eventExhibitors;
+    } else if (typeof statsData === 'object') {
+      // Handle object format
+      if (statsData.visitors !== undefined) {
+        statsStructure.visitor.total_count = statsData.visitors;
         hasChanges = true;
       }
-
-      if (statsData.eventVisitors !== undefined && this.isNumeric(statsData.eventVisitors)) {
-        statsStructure.visitor.total_count = statsData.eventVisitors;
+      if (statsData.exhibitors !== undefined) {
+        statsStructure.exhibitor.total_count = statsData.exhibitors;
         hasChanges = true;
       }
-
-      // Handle empty values (set to empty string, not null)
-      if (statsData.eventExhibitors === '' || statsData.eventExhibitors === null) {
-        statsStructure.exhibitor.total_count = '';
+      if (statsData.area !== undefined) {
+        statsStructure.area.total_area = statsData.area;
         hasChanges = true;
       }
-
-      if (statsData.eventVisitors === '' || statsData.eventVisitors === null) {
-        statsStructure.visitor.total_count = '';
-        hasChanges = true;
-      }
-
-      if (hasChanges) {
-        await this.saveStatsToDatabase(eventId, editionId, statsStructure, userId);
-        
-        await this.updateEditionTotals(editionId, statsStructure);
-      }
-
-      return { valid: true };
-    } catch (error) {
-      return { 
-        valid: false, 
-        message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}' 
-      };
     }
+
+    if (hasChanges) {
+      // Save to event_data table
+      await this.saveStatsToDatabase(eventId, editionId, statsStructure, userId, db);
+      
+      // CRITICAL: Update edition totals
+      await this.updateEditionTotals(editionId, statsStructure, db);
+      
+      this.logger.log(`Updated stats for event ${eventId}, edition ${editionId}`);
+    }
+
+    return { valid: true };
+  } catch (error) {
+    this.logger.error('Stats processing failed:', error);
+    return { 
+      valid: false, 
+      message: 'invalid format for stats, for reference format is {"visitors":"300","exhibitors":"300","area":"200"}' 
+    };
   }
+}
+
+// Ensure updateEditionTotals method is working correctly
+private async updateEditionTotals(
+  editionId: number,
+  statsStructure: StatsStructure,
+  prisma?: any
+): Promise<void> {
+  const db = prisma || this.prisma;
+  const updateData: any = {};
+
+  if (statsStructure.exhibitor.total_count !== '') {
+    const value = this.isNumeric(statsStructure.exhibitor.total_count) 
+      ? Number(statsStructure.exhibitor.total_count) 
+      : null;
+    updateData.exhibitors_total = value;
+    this.logger.log(`Setting exhibitors_total to: ${value}`);
+  }
+
+  if (statsStructure.visitor.total_count !== '') {
+    const value = this.isNumeric(statsStructure.visitor.total_count) 
+      ? Number(statsStructure.visitor.total_count) 
+      : null;
+    updateData.visitors_total = value;
+    this.logger.log(`Setting visitors_total to: ${value}`);
+  }
+
+  if (statsStructure.area.total_area !== '') {
+    const value = this.isNumeric(statsStructure.area.total_area) 
+      ? Number(statsStructure.area.total_area) 
+      : null;
+    updateData.area_total = value;
+    this.logger.log(`Setting area_total to: ${value}`);
+  }
+
+  if (Object.keys(updateData).length > 0) {
+    this.logger.log(`Updating edition ${editionId} with:`, updateData);
+    await db.event_edition.update({
+      where: { id: editionId },
+      data: {
+        ...updateData,
+        modified: new Date(),
+      }
+    });
+    this.logger.log(`Edition totals updated successfully`);
+  }
+}
 
   private async getOrCreateStatsStructure(
     eventId: number, 
-    editionId: number
+    editionId: number,
+    prisma?: any
   ): Promise<StatsStructure> {
-    const existingStats = await this.prisma.event_data.findFirst({
+    const db = prisma || this.prisma; 
+    const existingStats = await db.event_data.findFirst({
       where: {
         event: eventId,
         event_edition: editionId,
@@ -1580,9 +1619,11 @@ export class CommonService {
     eventId: number,
     editionId: number,
     statsStructure: StatsStructure,
-    userId: number
+    userId: number,
+    prisma?: any
   ): Promise<void> {
-    const existingStats = await this.prisma.event_data.findFirst({
+    const db = prisma || this.prisma; 
+    const existingStats = await db.event_data.findFirst({
       where: {
         event: eventId,
         event_edition: editionId,
@@ -1593,7 +1634,7 @@ export class CommonService {
     const statsJson = JSON.stringify(statsStructure);
 
     if (existingStats) {
-      await this.prisma.event_data.update({
+      await db.event_data.update({
         where: { id: existingStats.id },
         data: {
           value: statsJson,
@@ -1602,7 +1643,7 @@ export class CommonService {
         }
       });
     } else {
-      await this.prisma.event_data.create({
+      await db.event_data.create({
         data: {
           event: eventId,
           event_edition: editionId,
@@ -1615,43 +1656,6 @@ export class CommonService {
     }
   }
 
-  private async updateEditionTotals(
-    editionId: number,
-    statsStructure: StatsStructure
-  ): Promise<void> {
-    const updateData: any = {};
-
-    if (statsStructure.exhibitor.total_count !== '') {
-      updateData.exhibitors_total = this.isNumeric(statsStructure.exhibitor.total_count) 
-        ? Number(statsStructure.exhibitor.total_count) 
-        : null;
-    }
-
-    if (statsStructure.visitor.total_count !== '') {
-      updateData.visitors_total = this.isNumeric(statsStructure.visitor.total_count) 
-        ? Number(statsStructure.visitor.total_count) 
-        : null;
-    }
-
-    if (statsStructure.area.total_area !== '') {
-      updateData.area_total = this.isNumeric(statsStructure.area.total_area) 
-        ? Number(statsStructure.area.total_area) 
-        : null;
-    }
-
-    if (Object.keys(updateData).length > 0) {
-      await this.prisma.event_edition.update({
-        where: { id: editionId },
-        data: updateData
-      });
-    }
-  }
-
-
-  // private isNumeric(value: any): boolean {
-  //   if (value === null || value === undefined || value === '') return false;
-  //   return !isNaN(Number(value)) && !isNaN(parseFloat(value.toString()));
-  // }
 
   static validateStatsFormat(statsJson: string): boolean {
     try {
@@ -1667,8 +1671,11 @@ export class CommonService {
     editionId: number,
     subVenueData: string,
     venueId: number,
-    userId: number
+    userId: number,
+    prisma?: any
   ): Promise<{ valid: boolean; message?: string; subVenueIds?: number[] }> {
+    const db = prisma || this.prisma;
+    
     try {
       // Validate that venue is provided
       if (!venueId) {
@@ -1679,8 +1686,8 @@ export class CommonService {
       }
 
       // Validate venue exists
-      const venue = await this.prisma.venue.findUnique({
-        where: { id: venueId }
+      const venue = await db.venue.findUnique({
+        where: { id: venueId },
       });
 
       if (!venue) {
@@ -1708,7 +1715,7 @@ export class CommonService {
       const subVenueIds: number[] = [];
       
       for (const subVenueInput of subVenues) {
-        const subVenueId = await this.findOrCreateSubVenue(subVenueInput, venueId);
+        const subVenueId = await this.findOrCreateSubVenue(subVenueInput, venueId, userId, db);
         if (subVenueId) {
           subVenueIds.push(subVenueId);
         }
@@ -1718,7 +1725,7 @@ export class CommonService {
       const uniqueSubVenueIds = [...new Set(subVenueIds)];
 
       // Save to event data
-      await this.saveSubVenuesToEventData(eventId, editionId, uniqueSubVenueIds, userId);
+      await this.saveSubVenuesToEventData(eventId, editionId, uniqueSubVenueIds, userId, db);
 
       return {
         valid: true,
@@ -1733,49 +1740,58 @@ export class CommonService {
     }
   }
 
+
   private async findOrCreateSubVenue(
-    subVenueInput: SubVenueInput,
-    venueId: number
+    subVenueInput: SubVenueInput | string | number,
+    venueId: number,
+    userId: number,
+    db: any
   ): Promise<number | null> {
     try {
       let subVenue: any = null;
 
-      // First try to find by ID if numeric value provided
-      if (this.isNumeric(subVenueInput)) {
+      // Handle different input types
+      if (typeof subVenueInput === 'number' || (typeof subVenueInput === 'string' && this.isNumeric(subVenueInput))) {
         const numericValue = typeof subVenueInput === 'string' 
           ? parseInt(subVenueInput) 
           : Number(subVenueInput);
 
-        subVenue = await this.prisma.sub_venue.findUnique({
+        subVenue = await db.sub_venue.findUnique({
           where: { id: numericValue }
         });
       }
 
       // If not found by ID, try to find by name
-      if (!subVenue && (subVenueInput.name || typeof subVenueInput === 'string')) {
-        const nameValue = subVenueInput.name || String(subVenueInput);
+      if (!subVenue) {
+        let nameValue: string;
         
-        subVenue = await this.prisma.sub_venue.findFirst({
+        if (typeof subVenueInput === 'object' && subVenueInput.name) {
+          nameValue = subVenueInput.name;
+        } else {
+          nameValue = String(subVenueInput);
+        }
+        
+        subVenue = await db.sub_venue.findFirst({
           where: { 
             name: nameValue,
-            venue: venueId           }
-        });
-      }
-
-      if (!subVenue) {
-        const nameForCreation = subVenueInput.name || String(subVenueInput);
-        
-        subVenue = await this.prisma.sub_venue.create({
-          data: {
-            name: nameForCreation,
-            venue: venueId,
-            published: true,
-            createdby: 1,
+            venue: venueId
           }
         });
+
+        // Create if not found
+        if (!subVenue) {
+          subVenue = await db.sub_venue.create({
+            data: {
+              name: nameValue,
+              venue: venueId,
+              published: true,
+              createdby: userId,
+            }
+          });
+        }
       }
 
-      return subVenue.id;
+      return subVenue?.id || null;
 
     } catch (error) {
       console.error('Error processing sub-venue:', error);
@@ -1783,16 +1799,18 @@ export class CommonService {
     }
   }
 
+
   private async saveSubVenuesToEventData(
     eventId: number,
     editionId: number,
     subVenueIds: number[],
-    userId: number
+    userId: number,
+    db: any
   ): Promise<void> {
     const subVenueJson = JSON.stringify(subVenueIds);
 
     // Check if sub_venue data already exists
-    const existingSubVenueData = await this.prisma.event_data.findFirst({
+    const existingSubVenueData = await db.event_data.findFirst({
       where: {
         event: eventId,
         event_edition: editionId,
@@ -1802,7 +1820,7 @@ export class CommonService {
 
     if (existingSubVenueData) {
       // Update existing
-      await this.prisma.event_data.update({
+      await db.event_data.update({
         where: { id: existingSubVenueData.id },
         data: {
           value: subVenueJson,
@@ -1812,7 +1830,7 @@ export class CommonService {
       });
     } else {
       // Create new
-      await this.prisma.event_data.create({
+      await db.event_data.create({
         data: {
           event: eventId,
           event_edition: editionId,
