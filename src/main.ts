@@ -2,9 +2,26 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { patchNestJsSwagger, ZodValidationPipe } from 'nestjs-zod';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.KAFKA,
+    options: {
+      client: {
+        brokers: ['localhost:9092'], 
+      },
+      consumer: {
+        groupId: 'public-api-consumer', 
+      },
+    },
+  });
+
+  await app.startAllMicroservices();
+
 
   app.enableCors({
     credentials: true,

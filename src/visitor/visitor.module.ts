@@ -6,11 +6,12 @@ import { VisitorValidationService } from './services/visitor-validation.service'
 import { BadgeService } from './services/badge.service';
 import { QuestionnaireService } from './services/questionnaire.service';
 import { EmailService } from 'src/common/email.service';
-import { CommunicationService } from './services/communication.service';
+import { KafkaModule } from 'src/kafka/kafka.module';
+import { VisitorConsumer } from './visitor.consumer';
 
 @Module({
-  imports: [UserModule],
-  controllers: [VisitorController],
-  providers: [VisitorService, VisitorValidationService, BadgeService, QuestionnaireService, EmailService, CommunicationService],
+  imports: [UserModule, KafkaModule],
+  controllers: [VisitorController, VisitorConsumer],
+  providers: [VisitorService, VisitorValidationService, BadgeService, QuestionnaireService, EmailService],
 })
 export class VisitorModule {}

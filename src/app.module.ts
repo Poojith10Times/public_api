@@ -8,6 +8,7 @@ import { validateEnv } from './config/app.config';
 import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
 import { UserModule } from './user/user.module';
 import { VisitorModule } from './visitor/visitor.module';
+import { KafkaModule } from './kafka/kafka.module';
 
 @Module({
   imports: [
@@ -19,7 +20,8 @@ import { VisitorModule } from './visitor/visitor.module';
     EventModule,
     ElasticsearchModule,
     UserModule,
-    VisitorModule
+    VisitorModule,
+    KafkaModule
 
   ],
   controllers: [AppController],

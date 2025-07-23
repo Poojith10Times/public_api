@@ -10,7 +10,7 @@ import { event_visitor, user } from '@prisma/client';
 import { VisitorValidationService, PreparedVisitorData } from './visitor-validation.service';
 import { BadgeService } from './badge.service';
 import { QuestionnaireService } from './questionnaire.service';
-import { CommunicationService } from './communication.service';
+import { KafkaProducerService } from '../../kafka/kafka.producer.service';
 
 @Injectable()
 export class VisitorService {
@@ -22,7 +22,7 @@ export class VisitorService {
     private readonly validationService: VisitorValidationService,
     private readonly badgeService: BadgeService,
     private readonly questionnaireService: QuestionnaireService,
-    private readonly communicationService: CommunicationService,
+    private readonly kafkaProducer: KafkaProducerService,
   ) {}
 
   async register(
@@ -120,9 +120,15 @@ export class VisitorService {
         }
       }
       
-      // 7. Send Registration Communications
-      this.communicationService.sendRegistrationCommunications(visitor).catch(err => {
-            this.logger.error(`Failed to send communication for visitor ${visitor.id}`, err);
+      // 7. Send Communications via Kafka
+      this.kafkaProducer.sendMessage('email-notifications', {
+          type: 'visitor-confirmation',
+          visitorId: visitor.id,
+      });
+
+      this.kafkaProducer.sendMessage('email-notifications', {
+          type: 'organizer-notification',
+          visitorId: visitor.id,
       });
       
 
