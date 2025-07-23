@@ -6,8 +6,8 @@ import { PrismaModule } from './prisma/prisma.module';
 import { EventModule } from './event/event.module';
 import { validateEnv } from './config/app.config';
 import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
-// import { RabbitmqModule } from './rabbitmq/rabbitmq.module';
 import { UserModule } from './user/user.module';
+import { VisitorModule } from './visitor/visitor.module';
 
 @Module({
   imports: [
@@ -18,8 +18,8 @@ import { UserModule } from './user/user.module';
     PrismaModule,
     EventModule,
     ElasticsearchModule,
-    // RabbitmqModule,
     UserModule,
+    VisitorModule
 
   ],
   controllers: [AppController],

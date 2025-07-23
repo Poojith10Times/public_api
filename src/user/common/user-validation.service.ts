@@ -106,64 +106,6 @@ export class UserValidationService {
     }
   }
 
-  // async validateLocation(data: UserUpsertRequestDto): Promise<{
-  //   isValid: boolean;
-  //   message?: string;
-  //   locationData?: LocationData;
-  // }> {
-  //   try {
-  //     const locationData: LocationData = {};
-
-  //     // Handle place_id (Google Places integration)
-  //     if (data.placeId) {
-  //       const placeResult = await this.resolvePlaceId(data.placeId);
-  //       if (placeResult.isValid) {
-  //         locationData.cityId = placeResult.data.cityId;
-  //         locationData.countryId = placeResult.data.countryCode;
-  //       } else {
-  //         return {
-  //           isValid: false,
-  //           message: placeResult.message,
-  //         };
-  //       }
-  //     }
-
-  //     // Handle cityCode
-  //     if (data.city && typeof data.city === 'number') {
-  //       const city = await this.prisma.city.findUnique({
-  //         where: { id: data.city },
-  //         // include: {
-  //         //   country_city_countryTocountry: true,
-  //         // },
-  //       });
-
-  //       if (city) {
-  //         locationData.cityId = city.id;
-  //         locationData.countryId = city.country || undefined;
-  //         locationData.city = city;
-  //         locationData.country = city.country;
-  //       } else {
-  //         return {
-  //           isValid: false,
-  //           message: 'Invalid city code',
-  //         };
-  //       }
-  //     }
-
-  //     return {
-  //       isValid: true,
-  //       locationData,
-  //     };
-
-  //   } catch (error) {
-  //     this.logger.error(`Location validation error: ${error.message}`);
-  //     return {
-  //       isValid: false,
-  //       message: 'Location validation failed',
-  //     };
-  //   }
-  // }
-
   async validateLocation(data: UserUpsertRequestDto): Promise<{
     isValid: boolean;
     message?: string;
@@ -249,19 +191,6 @@ export class UserValidationService {
         shouldUpdateCompany: false,
       };
 
-      // if (data.companyId) {
-      //   if (typeof data.companyId === 'number') {
-      //     const company = await this.prisma.company.findUnique({
-      //       where: { id: data.companyId },
-      //     });
-
-      //     if (company) {
-      //       companyData.companyId = company.id;
-      //       companyData.company = company;
-      //     }
-      //   }
-      // }
-
       if (data.company && (userEmail || data.email)) {
         const email = userEmail || data.email;
         const domain = email!.split('@')[1];
@@ -296,19 +225,6 @@ export class UserValidationService {
       };
     }
   }
-
-  // shouldVerifyPhoneInternal(data: UserUpsertRequestDto): boolean {
-  //   if (data.verificationSource && ['sms', 'autocall', 'whatsapp'].includes(data.verificationSource)) {
-  //     return true;
-  //   }
-
-  //   // SMS verification
-  //   if (data.userVerified && data.inviteVerify) {
-  //     return true;
-  //   }
-  //   // For now, always return true
-  //   return true;
-  // }
 
   async shouldVerifyPhoneInternal(data: UserUpsertRequestDto): Promise<boolean> {
     if (data.firebaseToken && data.firebaseKey && data.phone) {
@@ -352,15 +268,6 @@ export class UserValidationService {
           designationData.designation = designationResult.data.realName;
         }
       }
-
-      // Handle designationId
-      // if (data.designationId) {
-      //   const designationResult = await this.checkDesignation(data.designationId, data.department);
-      //   if (designationResult.isValid) {
-      //     designationData.designationId = designationResult.data.tobeMapped;
-      //     designationData.designation = designationResult.data.realName;
-      //   }
-      // }
 
       // Validate designation length and content
       if (data.designation) {
@@ -613,14 +520,6 @@ export class UserValidationService {
         message: 'email|phone|linkedinId|twitterId|wikipediaId|facebookId|googleId atleast one is mandatory',
       };
     }
-
-    // Phone verification requirement for phone-only users
-    // if (!data.email && data.phone && data.phone_verified === false) {
-    //   return {
-    //     isValid: false,
-    //     message: 'phone unverified',
-    //   };
-    // }
 
     return { isValid: true };
   }
