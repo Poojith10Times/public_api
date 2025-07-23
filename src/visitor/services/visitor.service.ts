@@ -29,6 +29,7 @@ export class VisitorService {
     registrationData: VisitorRegistrationDto,
     requestingUserId: number,
     source: string,
+    tokenUserId?: number,
   ): Promise<VisitorRegistrationResponseDto> {
     this.logger.log(
       `Visitor registration initiated by user: ${requestingUserId} from source: ${source}`,
@@ -46,9 +47,16 @@ export class VisitorService {
           return { status: { code: 0, message: sourceValidation.message || 'Invalid source' } };
       }
 
+      let targetUserId = registrationData.userId;
+      if (authResult.authType === 'internal_access' && tokenUserId) {
+        this.logger.log(`Internal access: Using token-user-id ${tokenUserId} for registration.`);
+        targetUserId = tokenUserId;
+      }
+
       // 2. Upsert User (Create or Update)
       const userUpsertDto: UserUpsertRequestDto = {
         ...registrationData,
+        userId: targetUserId,
         changesMadeBy: requestingUserId,
         source: source,
       };

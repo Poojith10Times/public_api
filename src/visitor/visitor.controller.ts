@@ -5,6 +5,8 @@ import { VisitorRegistrationResponseDto } from './dto/visitor-registration-respo
 import { ApiTags } from '@nestjs/swagger';
 import { UserId } from '../common/Decorators/user-id.decorator';
 import { Source } from '../common/Decorators/source.decorator';
+import { TokenUserId } from '../common/Decorators/token-user-id.decorator'; 
+
 
 @ApiTags('Visitor API')
 @Controller('v1/visitor')
@@ -17,7 +19,8 @@ export class VisitorController {
     @Body() visitorRegistrationDto: VisitorRegistrationDto,
     @UserId() userId: number,
     @Source() source: string,
+    @TokenUserId() tokenUserId?: number, 
   ): Promise<VisitorRegistrationResponseDto> {
-    return this.visitorService.register(visitorRegistrationDto, userId, source);
+    return this.visitorService.register(visitorRegistrationDto, userId, source, tokenUserId);
   }
 }
