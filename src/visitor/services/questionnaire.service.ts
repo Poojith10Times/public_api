@@ -13,6 +13,35 @@ export class QuestionnaireService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  async getEventQuestions(eventId: number) {
+    const eventQuestionLinks = await this.prisma.event_questionnaire.findMany({
+      where: { event_id: eventId, published: true },
+    });
+
+    if (eventQuestionLinks.length === 0) {
+      return [];
+    }
+    
+    const questionIds = eventQuestionLinks.map(q => q.question_id);
+    const questions = await this.prisma.questionnaire.findMany({
+        where: { id: { in: questionIds } },
+    });
+
+    // Join the data in your code
+    return eventQuestionLinks.map(link => {
+        const questionDetail = questions.find(q => q.id === link.question_id);
+        if (!questionDetail) return null;
+
+        return {
+            id: link.question_id,
+            question: questionDetail.question,
+            answer_type: questionDetail.answer_type,
+            is_mandatory: link.is_mandatory,
+            options: JSON.parse(questionDetail.options || '[]')
+        };
+    }).filter(q => q !== null);
+  }
+
   async processAnswers(
     visitor: event_visitor,
     answers: Record<string, any>,

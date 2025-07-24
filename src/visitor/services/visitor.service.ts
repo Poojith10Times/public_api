@@ -11,6 +11,7 @@ import { VisitorValidationService, PreparedVisitorData } from './visitor-validat
 import { BadgeService } from './badge.service';
 import { QuestionnaireService } from './questionnaire.service';
 import { KafkaProducerService } from '../../kafka/kafka.producer.service';
+import { LeadsPushService } from './leads-push.service';
 
 @Injectable()
 export class VisitorService {
@@ -23,6 +24,7 @@ export class VisitorService {
     private readonly badgeService: BadgeService,
     private readonly questionnaireService: QuestionnaireService,
     private readonly kafkaProducer: KafkaProducerService,
+    private readonly leadsPushService: LeadsPushService,
   ) {}
 
   async register(
@@ -48,16 +50,18 @@ export class VisitorService {
       }
 
       let targetUserId = registrationData.userId;
+      let changesMadeBy = requestingUserId; 
       if (authResult.authType === 'internal_access' && tokenUserId) {
-        this.logger.log(`Internal access: Using token-user-id ${tokenUserId} for registration.`);
+        this.logger.log(`Internal access: Using token-user-id ${tokenUserId} for registration and as changesMadeBy.`);
         targetUserId = tokenUserId;
+        changesMadeBy = tokenUserId;
       }
 
       // 2. Upsert User (Create or Update)
       const userUpsertDto: UserUpsertRequestDto = {
         ...registrationData,
         userId: targetUserId,
-        changesMadeBy: requestingUserId,
+        changesMadeBy: changesMadeBy,
         source: source,
       };
 
@@ -81,72 +85,69 @@ export class VisitorService {
         return { status: { code: 0, message: 'User could not be retrieved after upsert.' }};
       }
 
-      // 3. Validate Event and Prepare Visitor-Specific Data
-      const validationResult = await this.validationService.validateAndPrepareData(
-        registrationData,
-        user,
-      );
-
-      if (!validationResult.isValid) {
-        return {
-          status: {
-            code: 0,
-            message: validationResult.message || 'Visitor data validation failed',
-          },
-        };
-      }
-
-      // 4. Create or Update EventVisitor Record
-      let visitor = await this.createOrUpdateVisitor(
-        validationResult.data!,
-        requestingUserId,
-      );
-
-       // 5. Assign Badge
-      const badgeId = await this.badgeService.assignBadgeToVisitor(visitor, registrationData);
-
-      if (badgeId) {
-        visitor = await this.prisma.event_visitor.update({
-          where: { id: visitor.id },
-          data: { badge: badgeId },
-        });
-      }
-
-      // 6. Process Questionnaire Answers
+      // SCENARIO 1: Answer Submission and Finalization
       if (registrationData.answers) {
-        const questionnaireResult = await this.questionnaireService.processAnswers(
-            visitor,
-            registrationData.answers,
-        );
+        this.logger.log(`Processing questionnaire answers for user ${userId}`);
+
+        const visitor = await this.prisma.event_visitor.findFirst({
+            where: { user: userId, event: registrationData.eventId }
+        });
+
+        if (!visitor) {
+            return { status: { code: 0, message: 'Visitor record not found. Please complete initial registration first.' }};
+        }
+
+        const questionnaireResult = await this.questionnaireService.processAnswers(visitor, registrationData.answers);
 
         if (!questionnaireResult.isValid) {
-            // NOTE: We might choose not to fail the whole registration here,
-            // but for now, we'll return the validation error.
-            return {
-                status: { code: 0, message: questionnaireResult.message || 'Questionnaire validation failed.'}
-            }
+            return { status: { code: 0, message: questionnaireResult.message || 'Questionnaire validation failed.'}};
         }
+        
+        // Mark visitor as fully complete
+        await this.prisma.event_visitor.update({
+            where: { id: visitor.id },
+            data: { completed_on: new Date() }
+        });
+
+        // Trigger final communications via Kafka
+        this.kafkaProducer.sendMessage('email-notifications', { type: 'visitor-confirmation', visitorId: visitor.id });
+        this.kafkaProducer.sendMessage('email-notifications', { type: 'organizer-notification', visitorId: visitor.id });
+        
+        return { status: { code: 1, message: 'Answers submitted successfully.' } };
+      } 
+      // SCENARIO 2: Initial Registration
+      else {
+        this.logger.log(`Processing initial registration for user ${userId}`);
+
+        const validationResult = await this.validationService.validateAndPrepareData(registrationData, user);
+        if (!validationResult.isValid) {
+            return { status: { code: 0, message: validationResult.message || 'Visitor data validation failed' } };
+        }
+
+        let visitor = await this.createOrUpdateVisitor(validationResult.data!, requestingUserId);
+        
+        const badgeId = await this.badgeService.assignBadgeToVisitor(visitor, registrationData);
+        if (badgeId) {
+            visitor = await this.prisma.event_visitor.update({ where: { id: visitor.id }, data: { badge: badgeId } });
+        }
+
+        if (visitor.completed_on) {
+          this.leadsPushService.pushLead(visitor).catch(err => {
+              this.logger.error(`Failed to push lead for visitor ${visitor.id}`, err);
+          });
       }
-      
-      // 7. Send Communications via Kafka
-      this.kafkaProducer.sendMessage('email-notifications', {
-          type: 'visitor-confirmation',
-          visitorId: visitor.id,
-      });
 
-      this.kafkaProducer.sendMessage('email-notifications', {
-          type: 'organizer-notification',
-          visitorId: visitor.id,
-      });
-      
+        const questions = await this.questionnaireService.getEventQuestions(visitor.event);
 
-      return {
-        status: { code: 1, message: 'Success' },
-        data: {
-          visitorId: visitor.id,
-          userId: user.id,
-        },
-      };
+        return {
+            status: { code: 1, message: 'Registration successful. Please submit answers.' },
+            data: {
+                visitorId: visitor.id,
+                userId: user.id,
+                questions: questions,
+            },
+        };
+      }
     } catch (error) {
       this.logger.error('Error during visitor registration:', error);
       return {
@@ -168,18 +169,29 @@ export class VisitorService {
       },
     });
     
-    const visitorPayload = {
-        // visitor_name: visitorData.name,
+    const visitorPayload: any = {
         visitor_company: visitorData.company,
         visitor_designation: visitorData.designation,
         visitor_phone: visitorData.phone,
         visitor_city: cityDetails?.id || visitorData.city,
         visitor_country: countryDetails?.id,
         source: visitorData.source || 'API',
-        completed_on: new Date(),
     }
 
+    const isComplete = !!(
+        visitorPayload.visitor_company &&
+        visitorPayload.visitor_designation &&
+        visitorPayload.visitor_city &&
+        visitorPayload.visitor_country &&
+        visitorPayload.visitor_phone
+    );
+
     if (existingVisitor) {
+
+      if (isComplete && !existingVisitor.completed_on) {
+          visitorPayload.completed_on = new Date();
+      }
+
       return this.prisma.event_visitor.update({
         where: { id: existingVisitor.id },
         data: {
@@ -189,6 +201,9 @@ export class VisitorService {
         },
       });
     } else {
+      if (isComplete) {
+          visitorPayload.completed_on = new Date();
+      }
       return this.prisma.event_visitor.create({
         data: {
           event: event.id,
