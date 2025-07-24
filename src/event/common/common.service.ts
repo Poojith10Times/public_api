@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { S3Service } from '../../common/s3.service'; 
-import { PipedriveService } from '../../common/pipedrive.service';
+// import { PipedriveService } from '../../common/pipedrive.service';
 import { EventESDocument } from '../../elasticsearch/elasticsearch.service';
 
 interface SubVenueInput {
@@ -49,7 +49,7 @@ export class CommonService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
-    private readonly pipedriveservice: PipedriveService
+    // private readonly pipedriveservice: PipedriveService
 
   ) {}
 
@@ -510,15 +510,15 @@ export class CommonService {
       }
 
       // Process Pipedrive relationships
-      if (pipedriveData.length > 0) {
-        const pipedriveResult = await this.pipedriveservice.insertContact(pipedriveData);
+      // if (pipedriveData.length > 0) {
+      //   const pipedriveResult = await this.pipedriveservice.insertContact(pipedriveData);
         
-        if (pipedriveResult.success) {
-          this.logger.log(`Pipedrive relationships processed: ${pipedriveResult.processedCount}`);
-        } else {
-          this.logger.warn(`Pipedrive processing failed: ${pipedriveResult.message}`);
-        }
-      }
+      //   if (pipedriveResult.success) {
+      //     this.logger.log(`Pipedrive relationships processed: ${pipedriveResult.processedCount}`);
+      //   } else {
+      //     this.logger.warn(`Pipedrive processing failed: ${pipedriveResult.message}`);
+      //   }
+      // }
 
       return { valid: true };
     } catch (error) {

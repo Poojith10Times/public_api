@@ -35,27 +35,10 @@ export class UserService {
 
       // Step 2: Determine source-based flags
       const sourceFlags = this.userValidationService.validateSource(userData.source);
-      
-      // Step 3: Check automatic phone verification
-      // const shouldVerifyPhone = this.userValidationService.shouldVerifyPhone(userData);
-      // if (shouldVerifyPhone) {
-      //   userData.phone_verified = true;
-      // }
+
 
       // const shouldVerifyPhone = this.userValidationService.shouldVerifyPhoneInternal(userData);
       const shouldVerifyPhone = await this.userValidationService.shouldVerifyPhoneInternal(userData);
-
-
-      // Step 4: Handle encoded user verification
-      // if (userData.encodeUser && userData.userId) {
-      //   const encodedValidation = this.userValidationService.validateEncodedUser(
-      //     userData.userId, 
-      //     userData.encodeUser
-      //   );
-      //   if (encodedValidation.isValid && encodedValidation.data?.status === 'verified') {
-      //     userData.userUpdate = true;
-      //   }
-      // }
 
       // Step 5: Location validation and resolution
       const locationValidation = await this.userValidationService.validateLocation(userData);
@@ -77,17 +60,6 @@ export class UserService {
         if (lookupResult.user.published === 0 && !userData.deactivate) {
             return await this.formatUserResponse(lookupResult.user);
         }
-
-        // const whatsappCheck = await this.userLookupService.checkWhatsAppVerification(
-        //     lookupResult.user, 
-        //     userData
-        // );
-        
-        // if (whatsappCheck.shouldVerifyPhone) {
-        //     // userData.phoneVerified = true;
-        //     userData.userUpdate = true;
-        //     userData.phone = whatsappCheck.phone;
-        // }
 
         if (userData.deactivate === 'false' && userData.deactivateId && 
             lookupResult.user.id === userData.deactivateId) {
@@ -304,14 +276,6 @@ export class UserService {
         return createUserErrorResponse(['Invalid email format']);
       }
 
-      // if (userData.phone) {
-      //   const duplicateCheck = await this.phoneValidationService.checkPhoneDuplicate(userData.phone);
-        
-      //   if (duplicateCheck.isDuplicate) {
-      //     return createUserErrorResponse(['Phone number already mapped to other account']);
-      //   }
-      // }
-
       // Company and designation validation
       const companyValidation = await this.userValidationService.validateCompany(
         userData, 
@@ -335,21 +299,6 @@ export class UserService {
           },
           tx
         );
-
-        // Handle phone setup if provided
-        // if (userData.phone) {
-        //   this.logger.log(`Setting up phone for user: ${newUser.id}`);
-        //   const phoneResult = await this.phoneValidationService.upsertUserPhone(
-        //     newUser.id,
-        //     userData.phone,
-        //     false,
-        //     Boolean(userData.phone_verified),
-        //     tx
-        //   );
-        //   if (!phoneResult.isValid) {
-        //     throw new Error(phoneResult.message || 'Phone setup failed');
-        //   }
-        // }
 
         if (userData.phone) {
           this.logger.log(`Setting up phone for user: ${newUser.id}`);

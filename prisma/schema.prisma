@@ -449,18 +449,18 @@ model app_tabs_mapping_lang {
 }
 
 model area_values {
-  id         Int       @id @default(autoincrement())
-  name       String?   @db.VarChar(100)
-  place_id   String?   @unique(map: "place_id") @db.VarChar(100)
-  url        String?   @db.VarChar(100)
-  type_value String?   @db.VarChar(100)
-  abbr_name  String?   @db.VarChar(100)
-  published  Int       @default(1) @db.TinyInt
-  country    String?   @db.VarChar(10)
-  geometry   Json?
-  av_source  String?   @db.VarChar(50)
-  city       city[]
-  country_rel    country[]
+  id          Int       @id @default(autoincrement())
+  name        String?   @db.VarChar(100)
+  place_id    String?   @unique(map: "place_id") @db.VarChar(100)
+  url         String?   @db.VarChar(100)
+  type_value  String?   @db.VarChar(100)
+  abbr_name   String?   @db.VarChar(100)
+  published   Int       @default(1) @db.TinyInt
+  country     String?   @db.VarChar(10)
+  geometry    Json?
+  av_source   String?   @db.VarChar(50)
+  city        city[]
+  country_rel country[]
 }
 
 model association_membership {
@@ -1115,7 +1115,6 @@ model city {
   utc_offset                                         Int?
   state_id                                           Int?
   timezone                                           String?               @db.VarChar(50)
-  // country_city_countryTocountry                      country?              @relation("CityToCountry", fields: [country], references: [id], onDelete: Restrict, onUpdate: Restrict)
   city                                               city?                 @relation("cityTocity", fields: [orig_city], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "city_ibfk_1")
   other_city                                         city[]                @relation("cityTocity")
   area_values                                        area_values?          @relation(fields: [state_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "city_ibfk_2")
@@ -1331,8 +1330,6 @@ model company {
   venue_venue_companyTocompany                       venue[]                  @relation("venue_companyTocompany")
   webinar_ledger                                     webinar_ledger[]
   whitelabel_conf                                    whitelabel_conf[]
-  pipedrive_relationships                            pipedrive[]              @relation("pipedrive_companyTocompany")
-
 
   @@index([account_manager, onboard_date], map: "account_manager")
   @@index([billing_company], map: "billing_company")
@@ -1604,6 +1601,7 @@ model contact_temp {
   verified_by    Int?
   verified_type  String?   @db.Char(2)
   designation_id Int?
+  department_id  Int?      @db.SmallInt
 
   @@unique([entity_id, entity_type, user_reference], map: "entity_id_2")
   @@index([entity_id], map: "entity_id")
@@ -1681,7 +1679,7 @@ model country {
   continent                                                String?               @db.VarChar(45)
   sub_continent                                            Int?
   sub_continent1                                           Int?
-  // cities                                                   city[]                @relation("CityToCountry")
+  income                                                   BigInt?               @db.UnsignedBigInt
   blacklist_domains                                        blacklist_domains[]
   company_company_countryTocountry                         company[]             @relation("company_countryTocountry")
   area_values                                              area_values?          @relation(fields: [sub_continent], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "area_values_fk")
@@ -2150,6 +2148,9 @@ model estimate {
   economic_impact                    String?   @db.Text
   request_payload_economic_impact    String?   @db.Text
   response_code_economic_impact      Int?
+  estimated_visitors_rational        String?   @db.Text
+  audience_geography_split_reasoning String?   @db.Text
+  model                              String?   @db.VarChar(200)
 
   @@index([venueId], map: "venueId")
 }
@@ -3423,7 +3424,7 @@ model event_ticket {
   price                           Float                  @default(0) @db.Float
   taxable                         String?                @db.VarChar(24)
   quantity                        Int?
-  description                     String?                @db.VarChar(150)
+  description                     String?                @db.VarChar(250)
   ticket_url                      String?                @db.VarChar(200)
   published                       Boolean                @default(true)
   created                         DateTime               @default(now()) @db.Timestamp(0)
@@ -3439,6 +3440,10 @@ model event_ticket {
   area                            Decimal?               @db.Decimal(10, 6)
   unit                            String?                @db.VarChar(20)
   discount                        String?                @db.VarChar(50)
+  source_url                      String?                @db.VarChar(200)
+  pricing_for                     String?                @db.VarChar(20)
+  stall_length                    Int?
+  stall_width                     Int?
   agenda_ticket                   agenda_ticket[]
   event_floorplan                 event_floorplan[]
   event_event_ticket_eventToevent event                  @relation("event_ticket_eventToevent", fields: [event], references: [id], onUpdate: Restrict, map: "event_ticket_ibfk_1")
@@ -3542,8 +3547,8 @@ model event_update {
   exhibitor_count          Int
   visitor_count            Int
   company_id               Int?
-  last_visitor             DateTime  @default(now()) @db.Timestamp(0)
-  last_exhibitor           DateTime  @default(dbgenerated("'0000-00-00 00:00:00'")) @db.Timestamp(0)
+  last_visitor             DateTime? @db.Timestamp(0)
+  last_exhibitor           DateTime? @db.Timestamp(0)
   total_exhibitor          Int?
   exhibitor_lead           Int       @default(0)
   exhibitor_meta           String?   @db.VarChar(10000)
@@ -3554,7 +3559,7 @@ model event_update {
   modified                 DateTime? @db.Date
   modified_stats           String?   @db.Text
   start_date               DateTime? @db.Date
-  end_date                 DateTime  @default(dbgenerated("'0000-00-00'")) @db.Date
+  end_date                 DateTime  @db.Date
   city_name                String?   @db.VarChar(45)
   country_name             String?   @db.VarChar(45)
   edition                  Int?
@@ -4904,17 +4909,7 @@ model pipedrive {
   odash_last_login      DateTime? @db.DateTime(0)
   activityCount         String?   @db.VarChar(255)
 
-  company_relation      company   @relation("pipedrive_companyTocompany", fields: [company], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  user_relation         user      @relation("pipedrive_userTouser", fields: [user], references: [id], onDelete: Cascade, onUpdate: Restrict)
-
   @@unique([company, user], map: "company")
-
-  @@index([company], map: "idx_pipedrive_company")
-  @@index([user], map: "idx_pipedrive_user") 
-  @@index([published], map: "idx_pipedrive_published")
-  @@index([created], map: "idx_pipedrive_created")
-  @@index([pd_deal_status], map: "idx_pipedrive_deal_status")
-  @@index([odash_last_login], map: "idx_pipedrive_last_login")
 }
 
 model poll {
@@ -5453,7 +5448,7 @@ model questionnaire {
   id                    Int                     @id @default(autoincrement())
   question              String                  @db.VarChar(1500)
   options               String?                 @db.VarChar(15000)
-  answer_type           Boolean                 @default(false)
+  answer_type           Int                     @db.TinyInt @default(0)
   configuration         String?                 @db.VarChar(1000)
   campaign_feedback     campaign_feedback[]
   faq                   faq[]
@@ -6640,7 +6635,7 @@ model user {
   name                                                                 String?                        @db.VarChar(100)
   about                                                                String?                        @db.VarChar(200)
   membership                                                           Int?
-  company                                                              Int?                           
+  company                                                              Int?
   profile                                                              String?                        @db.VarChar(4000)
   linkedin_profile                                                     String?                        @db.LongText
   city                                                                 Int?
@@ -6807,8 +6802,6 @@ model user {
   visitor_meetings                                                     visitor_meetings[]
   webinar_ledger                                                       webinar_ledger[]
   whitelabel_conf                                                      whitelabel_conf[]
-  pipedrive_relationships                                              pipedrive[]                    @relation("pipedrive_userTouser")
-
 
   @@index([autointroduce], map: "autointroduce")
   @@index([city], map: "city")
@@ -7872,12 +7865,14 @@ model webinar_ledger {
 
 model website_type {
   id                    Int       @id @default(autoincrement())
-  host                  String?   @db.VarChar(100)
+  host                  String?   @unique(map: "host_2") @db.VarChar(100)
   type1_from_host       String?   @db.VarChar(200)
+  type2_from_host       String?   @db.VarChar(200)
+  type1_from_manual     String?   @db.VarChar(200)
+  type2_from_manual     String?   @db.VarChar(200)
   llm_outcome_from_host String?   @db.VarChar(500)
   created               DateTime? @db.Date
   updated               DateTime? @db.Date
-  type2_from_host       String?   @db.VarChar(200)
 
   @@index([created], map: "created")
   @@index([host], map: "host")
@@ -7916,6 +7911,41 @@ model work_order_history {
   service_agreement_service_work_order_history_service_agreement_serviceToservice_agreement_service service_agreement_service? @relation("work_order_history_service_agreement_serviceToservice_agreement_service", fields: [service_agreement_service], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_workorderhis_sas_id")
 
   @@index([service_agreement_service], map: "fk_workorderhis_sas_id")
+}
+
+model gemini {
+  id       Int      @id @default(autoincrement())
+  event_id Int?
+  payload  String?  @db.Text
+  response String?  @db.Text
+  created  DateTime @default(now()) @db.DateTime(0)
+}
+
+model org_tag {
+  id        Int  @id @default(autoincrement())
+  tag_id    Int?
+  thread_id Int?
+  published Int  @db.TinyInt
+}
+
+model prospect {
+  id              BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  city            String @db.VarChar(120)
+  country         String @db.VarChar(120)
+  category        String @db.VarChar(120)
+  anonymous_users Int    @default(0) @db.UnsignedInt
+  exhibitors      Int    @db.UnsignedInt
+
+  @@index([country, city, category], map: "idx_ccc")
+}
+
+model redirect_url {
+  id          Int      @id @default(autoincrement())
+  entity_type Int      @db.TinyInt
+  entity_id   Int
+  old_url     String   @db.VarChar(50)
+  new_url     String   @db.VarChar(50)
+  published   Boolean?
 }
 
 enum leads_source {

@@ -21,7 +21,7 @@ import { CommonService } from './common/common.service';
 // import { SubVenueManagementService } from './common/sub-venue-management.service';
 import { ConfigModule } from '@nestjs/config';
 import { FirebaseSessionService } from 'src/common/firebase-session.service';
-import { PipedriveService } from '../common/pipedrive.service';
+// import { PipedriveService } from '../common/pipedrive.service';
 import { UnifiedReviewService } from '../common/review.service';
 
 @Module({
@@ -51,7 +51,7 @@ import { UnifiedReviewService } from '../common/review.service';
     // SubVenueManagementService,
     // ReviewQcService,
     UnifiedReviewService,
-    PipedriveService,
+    // PipedriveService,
 
     FirebaseSessionService
   ],
