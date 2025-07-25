@@ -1,104 +1,3 @@
-// import { Injectable, Logger } from '@nestjs/common';
-// import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-
-// @Injectable()
-// export class S3Service {
-//   private readonly logger = new Logger(S3Service.name);
-//   private readonly s3Client: S3Client;
-//   private readonly bucketName = 'gifbt';
-  
-//   constructor() {
-//     this.s3Client = new S3Client({
-//       region: process.env.AWS_REGION || 'us-east-1',
-//       credentials: {
-//         accessKeyId: process.env.AWS_ACCESS_KEY_ID || 'AKIAIEW2PE2TNNMTW5TA',
-//         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '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',
-//       },
-//     });
-//   }
-
-//   async uploadBannerImage(eventId: number, base64Image: string): Promise<string | null> {
-//     try {
-//       // Parse base64 data URL
-//       const matches = base64Image.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
-//       if (!matches) {
-//         this.logger.error('Invalid base64 image format');
-//         return null;
-//       }
-
-//       const imageType = matches[1]; // jpg, png, etc.
-//       const imageData = matches[2];
-      
-//       // Validate image type
-//       if (!['jpg', 'jpeg', 'png'].includes(imageType.toLowerCase())) {
-//         this.logger.error(`Unsupported image type: ${imageType}`);
-//         return null;
-//       }
-
-//       // Convert base64 to buffer
-//       const imageBuffer = Buffer.from(imageData, 'base64');
-      
-//       // Generate filename
-//       const fileName = `${eventId}_bannerImage`;
-//       const fileExtension = imageType === 'jpg' ? 'jpg' : imageType;
-      
-//       // S3 destination path 
-//       const s3Key = `dashboard/events/banner_image/${fileName}.${fileExtension}`;
-
-//       // Upload to S3
-//       const uploadCommand = new PutObjectCommand({
-//         Bucket: this.bucketName,
-//         Key: s3Key,
-//         Body: imageBuffer,
-//         ContentType: `image/${imageType}`,
-//         // ACL: 'public-read',
-//         CacheControl: 'max-age=315360000',
-//         Expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
-//       });
-
-//       await this.s3Client.send(uploadCommand);
-
-//       // Return a simple S3 URL 
-//       const s3Url = `https://${this.bucketName}.s3.amazonaws.com/${s3Key}`;
-//       this.logger.log(`Successfully uploaded banner image for event ${eventId} to S3: ${s3Url}`);
-      
-//       return s3Url;
-
-//     } catch (error) {
-//       this.logger.error(`Failed to upload banner image for event ${eventId}:`, error.message);
-//       return null;
-//     }
-//   }
-
-//   async processCustomizationBannerImage(customizationData: any, eventId: number): Promise<any> {
-//     if (!customizationData.banner_link) {
-//       return customizationData;
-//     }
-
-//     const imgStr = customizationData.banner_link;
-
-//     // Check if it's a base64 data URL
-//     if (imgStr.includes('data:image/')) {
-//       this.logger.log(`Processing base64 banner image for event ${eventId}`);
-      
-//       const uploadedUrl = await this.uploadBannerImage(eventId, imgStr);
-//       customizationData.banner_link = uploadedUrl;
-      
-//     } else if (imgStr.includes('c1.10times.com') || imgStr.includes('stg.10times.com')) {
-//       // Keep existing URLs as they are
-//       this.logger.log(`Keeping existing banner image URL for event ${eventId}: ${imgStr}`);
-//       customizationData.banner_link = imgStr;
-      
-//     } else {
-//       // Invalid or unknown format
-//       this.logger.warn(`Invalid banner image format for event ${eventId}, setting to null`);
-//       customizationData.banner_link = null;
-//     }
-
-//     return customizationData;
-//   }
-// }
-
 import { Injectable, Logger } from '@nestjs/common';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import * as sharp from 'sharp';
@@ -277,9 +176,6 @@ export class S3Service {
     return this.uploadFile(logoBuffer, fileName, `image/${fileExtension}`, folder);
   }
 
-  /**
-   * Upload event wrapper image (auto-generated wrapper images)
-   */
   async uploadEventWrapper(eventId: number, wrapperBuffer: Buffer): Promise<string | null> {
     const fileName = `${eventId}_wrapper.jpg`;
     const folder = 'events/wrappers';
@@ -363,4 +259,60 @@ export class S3Service {
       return { healthy: false, message: `S3 service error: ${error.message}` };
     }
   }
+
+  async uploadBase64Image(
+    base64Image: string,
+    s3Key: string,
+  ): Promise<{ cdnUrl: string | null; error?: string }> {
+    try {
+      const matches = base64Image.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
+      if (!matches) {
+        return { cdnUrl: null, error: 'Invalid base64 image format' };
+      }
+
+      const imageType = matches[1].toLowerCase();
+      const imageData = matches[2];
+
+      if (!['jpg', 'jpeg', 'png'].includes(imageType)) {
+        return { cdnUrl: null, error: `Unsupported image type: ${imageType}` };
+      }
+
+      let imageBuffer = Buffer.from(imageData, 'base64');
+      imageBuffer = await this.processAndCompress(imageBuffer);
+
+      const uploadCommand = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: s3Key,
+        Body: imageBuffer,
+        ContentType: `image/${imageType === 'jpeg' ? 'jpg' : imageType}`,
+        CacheControl: 'max-age=315360000',
+      });
+
+      await this.s3Client.send(uploadCommand);
+
+      const cdnUrl = this.getCdnUrl(s3Key);
+      this.logger.log(`Successfully uploaded image to S3: ${cdnUrl}`);
+      return { cdnUrl };
+    } catch (error) {
+      this.logger.error(`Failed to upload image to S3 key ${s3Key}:`, error.message);
+      return { cdnUrl: null, error: error.message };
+    }
+  }
+
+  private async processAndCompress(imageBuffer: Buffer): Promise<Buffer> {
+    try {
+      const fileSizeKB = imageBuffer.length / 1024;
+      if (fileSizeKB > 1024) { // If larger than 1MB
+        this.logger.log(`Image size ${fileSizeKB}KB exceeds limit, compressing...`);
+        return sharp(imageBuffer)
+          .jpeg({ quality: 50, progressive: true })
+          .toBuffer();
+      }
+      return imageBuffer;
+    } catch (error) {
+        this.logger.error('Image processing failed:', error.message);
+        return imageBuffer; 
+    }
+  }
+
 }

@@ -9,6 +9,7 @@ import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
 import { UserModule } from './user/user.module';
 import { VisitorModule } from './visitor/visitor.module';
 import { KafkaModule } from './kafka/kafka.module';
+import { SponsorModule } from './sponsors/sponsor.module';
 
 @Module({
   imports: [
@@ -21,7 +22,8 @@ import { KafkaModule } from './kafka/kafka.module';
     ElasticsearchModule,
     UserModule,
     VisitorModule,
-    KafkaModule
+    KafkaModule,
+    SponsorModule, 
 
   ],
   controllers: [AppController],

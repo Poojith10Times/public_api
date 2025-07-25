@@ -3392,7 +3392,7 @@ model event_sponsors {
   title                                                     String?        @db.VarChar(200)
   name                                                      String?        @db.VarChar(50)
   company_id                                                Int?
-  position                                                  Boolean?
+  position                                                  Int?           @db.TinyInt @default(0)
   logo                                                      Int?
   published                                                 Int?           @default(1) @db.TinyInt
   created                                                   DateTime       @default(now()) @db.DateTime(0)
@@ -4495,7 +4495,7 @@ model leads_push {
   url                           String    @db.VarChar(300)
   fixed_fields                  String?   @db.VarChar(500)
   custom_fields                 String?   @db.VarChar(500)
-  published                     Boolean   @default(false)
+  published                     Int?      @db.TinyInt @default(0)
   last_run                      DateTime? @db.Timestamp(0)
   created                       DateTime  @default(now()) @db.Timestamp(0)
   modified                      DateTime? @db.Timestamp(0)
